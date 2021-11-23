@@ -1,3 +1,5 @@
+#define ECU_COMMAND_INIT 0xEF
+#define ECU_COMMAND_NULL 0xFF
 #define ECU_COMMAND_READ_REGISTER 0x5A
 #define ECU_COMMAND_SELF_DIAG 0xD1
 #define ECU_COMMAND_CLEAR_CODES 0xC1
@@ -37,8 +39,6 @@
 
 #define ECU_REGISTER_NULL 0xFF
 
-#define ECU_MSG_INIT_OK 0x10
-
 // STREAM FRAME SIZE
 #define MSG_BYTES_SIZE 18
 
@@ -49,6 +49,13 @@
 
 uint8_t state = STATE_STARTUP;
 
+#define FRSTATE_STREAM 0
+#define FRSTATE_ECU_INFO 1
+
+uint8_t frameReadState = FRSTATE_STREAM;
+uint8_t frameReadCount = 0;
+bool needReadFrame = false;
+
 bool forceStopStream = false;
 
 byte ecuByte;
@@ -56,9 +63,6 @@ byte prevEcuByte;
 
 byte data[MSG_BYTES_SIZE];
 char ecuPartNo[12];
-
-int streamReadCount = 0;
-bool needReadStream = false;
 
 void setup() {
   Serial.begin(115200);
@@ -99,39 +103,45 @@ void loop() {
     // }
     // DEBUG
 
-    if (needReadStream) {
-      data[streamReadCount] = ecuByte;
-      streamReadCount++;
-      if (streamReadCount == MSG_BYTES_SIZE) {
-        needReadStream = false;
-        streamReadCount = 0;
+    if (needReadFrame) {
+      switch (frameReadState) {
+        case FRSTATE_STREAM:
+          data[frameReadCount] = ecuByte;
+          frameReadCount++;
+          if (frameReadCount == MSG_BYTES_SIZE) {
+            needReadFrame = false;
+            frameReadCount = 0;
+          }
+          break;
+        case FRSTATE_ECU_INFO:
+          if (frameReadCount >= 18) {
+            ecuPartNo[frameReadCount - 18 + 6] = (char)ecuByte;
+          }
+          frameReadCount++;
+          if (frameReadCount == 23) {
+            needReadFrame = false;
+            frameReadCount = 0;
+            stopStream();
+          }
+          break;
+        default:
+          break;
       }
-    } else if (state == STATE_INITIALIZING && ecuByte == ECU_MSG_INIT_OK) { // init ok
+    } else if (state == STATE_INITIALIZING && errorCheckCommandByte(ecuByte, ECU_COMMAND_INIT)) {
       state = STATE_IDLE;
       Serial.println("Initialized succesfully!");
-    } else if (ecuByte == 0x2F) { // read ecu part no; TODO: shouldn't work anymore
+    } else if (state == STATE_IDLE && errorCheckCommandByte(ecuByte, ECU_COMMAND_ECU_INFO)) {
+      needReadFrame = true;
+      frameReadState = FRSTATE_ECU_INFO;
       ecuPartNo[0] = '2';
       ecuPartNo[1] = '3';
       ecuPartNo[2] = '7';
       ecuPartNo[3] = '1';
       ecuPartNo[4] = '0';
       ecuPartNo[5] = '-';
-
-      readEcu();
-
-      int curPos = 6;
-
-      for (int x = 1; x <= 23; x++) {
-        ecuByte = readEcu();
-        if (x >= 19 && x <= 23) {
-          ecuPartNo[curPos] = (char)ecuByte;
-          curPos++;
-        }
-      }
-
-      stopStream();
-    } else if (ecuByte == MSG_BYTES_SIZE && prevEcuByte == ECU_REGISTER_NULL) { // read stream
-      needReadStream = true;
+    } else if (state == STATE_STREAMING && ecuByte == MSG_BYTES_SIZE && prevEcuByte == ECU_REGISTER_NULL) {
+      needReadFrame = true;
+      frameReadState = FRSTATE_STREAM;
     }
   }
 
@@ -149,7 +159,6 @@ void loop() {
     }
     if (command == 52) { // ecu part number 4
       Serial.println("Requesting ECU part number");
-      stopStream();
       writeEcu(ECU_COMMAND_ECU_INFO);
       writeEcu(ECU_COMMAND_TERM);
     }
@@ -221,8 +230,8 @@ void loop() {
       Serial.print("VTC: "); Serial.print(vtcSolenoid ? 1 : 0); Serial.print("; ");
       Serial.println();
 
-      // Serial.print("ECU Part no: ");
-      // Serial.println(ecuPartNo);
+      Serial.print("ECU Part no: ");
+      Serial.println(ecuPartNo);
     }
   }
 }
@@ -230,12 +239,12 @@ void loop() {
 void initECU() {
   stopStream();
   state = STATE_INITIALIZING;
-  writeEcu(0xFF);
-  writeEcu(0xFF);
-  writeEcu(0xEF);
-  writeEcu(0xFF);
-  writeEcu(0xFF);
-  writeEcu(0xEF);
+  writeEcu(ECU_COMMAND_NULL);
+  writeEcu(ECU_COMMAND_NULL);
+  writeEcu(ECU_COMMAND_INIT);
+  writeEcu(ECU_COMMAND_NULL);
+  writeEcu(ECU_COMMAND_NULL);
+  writeEcu(ECU_COMMAND_INIT);
 }
 
 void requestStreaming() {
@@ -288,11 +297,15 @@ byte readEcu() {
   return (byte)Serial3.read();
 }
 
+boolean errorCheckCommandByte(byte commandByte, byte errorCheckByte) {
+  return commandByte != (byte)~errorCheckByte;
+}
+
 void stopStream() {
   state = STATE_IDLE;
 
-  needReadStream = false;
-  streamReadCount = 0;
+  needReadFrame = false;
+  frameReadCount = 0;
 
   writeEcu(ECU_COMMAND_STOP_STREAM);
   delay(100);
