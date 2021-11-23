@@ -50,6 +50,7 @@
 #define STATE_STREAMING 5
 
 uint8_t state = STATE_STARTUP;
+uint8_t prevState;
 
 #define FRSTATE_STREAM 0
 #define FRSTATE_ECU_INFO 1
@@ -66,17 +67,28 @@ byte prevEcuByte;
 byte data[MSG_BYTES_SIZE];
 char ecuPartNo[12];
 
+unsigned long time;
+unsigned long tempTime;
+
 void setup() {
   Serial.begin(115200);
   Serial3.begin(9600);
 }
 
-uint8_t prevState;
-
 void loop() {
+  time = millis();
+
   if (state != prevState) {
-    Serial.print("State: ");
-    Serial.println(state);
+    Serial.print("State changed: ");
+    switch (state) {
+      case STATE_STARTUP: Serial.println("STATE_STARTUP"); break;
+      case STATE_INITIALIZING: Serial.println("STATE_INITIALIZING"); break;
+      case STATE_POST_INIT_START: Serial.println("STATE_POST_INIT_START"); break;
+      case STATE_POST_INIT: Serial.println("STATE_POST_INIT"); break;
+      case STATE_IDLE: Serial.println("STATE_IDLE"); break;
+      case STATE_STREAMING: Serial.println("STATE_STREAMING"); break;
+      default: Serial.println(state); break;
+    }
   }
   prevState = state;
 
@@ -92,6 +104,9 @@ void loop() {
       postInit();
       break;
     case STATE_POST_INIT:
+      if (time - tempTime > 1000) {
+        state = STATE_STARTUP;
+      }
       break;
     case STATE_IDLE:
       if (!forceStopStream) {
@@ -265,6 +280,7 @@ void postInit() {
   state = STATE_POST_INIT;
   writeEcu(ECU_COMMAND_ECU_INFO);
   writeEcu(ECU_COMMAND_TERM);
+  tempTime = time;
 }
 
 void requestStreaming() {
