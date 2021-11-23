@@ -44,8 +44,10 @@
 
 #define STATE_STARTUP 0
 #define STATE_INITIALIZING 1
-#define STATE_IDLE 2
-#define STATE_STREAMING 3
+#define STATE_POST_INIT_START 2
+#define STATE_POST_INIT 3
+#define STATE_IDLE 4
+#define STATE_STREAMING 5
 
 uint8_t state = STATE_STARTUP;
 
@@ -69,13 +71,27 @@ void setup() {
   Serial3.begin(9600);
 }
 
+uint8_t prevState;
+
 void loop() {
+  if (state != prevState) {
+    Serial.print("State: ");
+    Serial.println(state);
+  }
+  prevState = state;
+
   switch (state) {
     case STATE_STARTUP:
       Serial.println("Initializing...");
       initECU();
       break;
     case STATE_INITIALIZING:
+      break;
+    case STATE_POST_INIT_START:
+      Serial.println("Requesting ECU part number");
+      postInit();
+      break;
+    case STATE_POST_INIT:
       break;
     case STATE_IDLE:
       if (!forceStopStream) {
@@ -121,6 +137,7 @@ void loop() {
           if (frameReadCount == 23) {
             needReadFrame = false;
             frameReadCount = 0;
+            Serial.println("Got ECU Part Number");
             stopStream();
           }
           break;
@@ -128,9 +145,10 @@ void loop() {
           break;
       }
     } else if (state == STATE_INITIALIZING && errorCheckCommandByte(ecuByte, ECU_COMMAND_INIT)) {
-      state = STATE_IDLE;
+      state = STATE_POST_INIT_START;
       Serial.println("Initialized succesfully!");
-    } else if (state == STATE_IDLE && errorCheckCommandByte(ecuByte, ECU_COMMAND_ECU_INFO)) {
+    } else if (state == STATE_POST_INIT && errorCheckCommandByte(ecuByte, ECU_COMMAND_ECU_INFO)) {
+      Serial.println("Reading part number");
       needReadFrame = true;
       frameReadState = FRSTATE_ECU_INFO;
       ecuPartNo[0] = '2';
@@ -156,11 +174,6 @@ void loop() {
       Serial.println("Streaming stopped");
       forceStopStream = true;
       stopStream();
-    }
-    if (command == 52) { // ecu part number 4
-      Serial.println("Requesting ECU part number");
-      writeEcu(ECU_COMMAND_ECU_INFO);
-      writeEcu(ECU_COMMAND_TERM);
     }
     if (command == 53) { // print data 5
       // for (int i = 0; i <= 8; i++) {
@@ -245,6 +258,13 @@ void initECU() {
   writeEcu(ECU_COMMAND_NULL);
   writeEcu(ECU_COMMAND_NULL);
   writeEcu(ECU_COMMAND_INIT);
+}
+
+void postInit() {
+  stopStream();
+  state = STATE_POST_INIT;
+  writeEcu(ECU_COMMAND_ECU_INFO);
+  writeEcu(ECU_COMMAND_TERM);
 }
 
 void requestStreaming() {
