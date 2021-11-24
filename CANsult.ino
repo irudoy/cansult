@@ -74,7 +74,7 @@
 //////////////////////////////////////////////
 
 // STREAM FRAME SIZE
-#define MSG_BYTES_SIZE 18
+#define MSG_BYTES_SIZE 17
 
 // STATE
 #define STATE_STARTUP 0
@@ -114,6 +114,8 @@ byte currentFaultCodes[FAULT_CODES_BUFFER_SIZE];
 void setup() {
   DebugSerial.begin(115200);
   Consult.begin(9600);
+
+  resetFaultCodesReader();
 }
 
 void loop() {
@@ -140,11 +142,7 @@ void processDebugSerial() {
     // 1
     if (command == 49) {
       DebugSerial.println("Reading err codes");
-      forceStopStream = true;
-      stopStream();
-      state = STATE_WAITING_ECU_RESPONSE;
-      writeEcu(ECU_COMMAND_SELF_DIAG);
-      writeEcu(ECU_COMMAND_TERM);
+      readFaultCodes();
     }
 
     // TMP: Start the stream
@@ -181,7 +179,6 @@ void processDebugSerial() {
       int ignTimingDegBTDC = 110 - data[2];
       int O2VoltageMv = data[3] * 10;
       int TPSVoltageMv = data[4] * 20;
-      int EGTVoltageMv = data[5] * 20;
       int AACValvePerc = data[6] / 2;
       int AFAlphaPerc = data[7];
       int AFAlphaSLPerc = data[8];
@@ -201,7 +198,6 @@ void processDebugSerial() {
       DebugSerial.print("IGN TIMING: "); DebugSerial.print(ignTimingDegBTDC); DebugSerial.print("; ");
       DebugSerial.print("O2: "); DebugSerial.print(O2VoltageMv / 1000.0); DebugSerial.print("V; ");
       DebugSerial.print("TPS: "); DebugSerial.print(TPSVoltageMv / 1000.0); DebugSerial.print("V; ");
-      DebugSerial.print("EGT: "); DebugSerial.print(EGTVoltageMv / 1000.0); DebugSerial.print("V; ");
       DebugSerial.print("AAC: "); DebugSerial.print(AACValvePerc); DebugSerial.print("%; ");
       DebugSerial.print("A/F Alpha: "); DebugSerial.print(AFAlphaPerc); DebugSerial.print("%; ");
       DebugSerial.print("A/F Alpha (Self-Learn): "); DebugSerial.print(AFAlphaSLPerc); DebugSerial.print("%; ");
@@ -288,8 +284,12 @@ void processECUInputByte() {
       }
     }
 
+    // Reading ECU response byte-by-byte
     if (needReadFrame) {
+
       switch (frameReadState) {
+
+        // MAIN STREAM
         case FRSTATE_STREAM:
           data[frameReadCount] = ecuByte;
           frameReadCount++;
@@ -297,6 +297,8 @@ void processECUInputByte() {
             resetFrameReader();
           }
           break;
+
+        // ECU PART NUMBER
         case FRSTATE_ECU_INFO:
           if (frameReadCount >= 19) {
             ecuPartNo[frameReadCount - 19 + 6] = (char)ecuByte;
@@ -305,9 +307,11 @@ void processECUInputByte() {
           if (frameReadCount == 24) {
             resetFrameReader();
             if (DEBUG_SERIAL_PRINT) DebugSerial.println("Got ECU Part Number");
-            stopStream();
+            readFaultCodes();
           }
           break;
+
+        // FAULT CODES
         case FRSTATE_FAULT_CODES:
           if (prevEcuByte == ECU_REGISTER_NULL) {
             currentFaultCodesCount = ecuByte;
@@ -325,28 +329,53 @@ void processECUInputByte() {
             }
           }
           break;
+
         default:
           break;
+
       }
+
+    // ECU Init OK, moving forward
     } else if (state == STATE_INITIALIZING && errorCheckCommandByte(ecuByte, ECU_COMMAND_INIT)) {
+
       state = STATE_POST_INIT;
       if (DEBUG_SERIAL_PRINT) DebugSerial.println("Initialized succesfully!");
+
+    // Something was requested, checking ECU response
     } else if (state == STATE_WAITING_ECU_RESPONSE) {
+
+      // Got ECU Part number
       if (errorCheckCommandByte(ecuByte, ECU_COMMAND_ECU_INFO)) {
         if (DEBUG_SERIAL_PRINT) DebugSerial.println("Reading part number");
         startFrameReader(FRSTATE_ECU_INFO);
       }
+
+      // Got Self Diag Codes
       if (errorCheckCommandByte(ecuByte, ECU_COMMAND_SELF_DIAG)) {
         if (DEBUG_SERIAL_PRINT) DebugSerial.println("Reading fault codes");
         startFrameReader(FRSTATE_FAULT_CODES);
         resetFaultCodesReader();
       }
+
+      // Got Clean DTC Codes Success Response
       if (errorCheckCommandByte(ecuByte, ECU_COMMAND_CLEAR_CODES)) {
         if (DEBUG_SERIAL_PRINT) DebugSerial.println("Fault codes cleared succesfully");
-        resumeMainStream();
+        readFaultCodes();
       }
-    } else if (state == STATE_STREAMING && ecuByte == MSG_BYTES_SIZE && prevEcuByte == ECU_REGISTER_NULL) {
-      startFrameReader(FRSTATE_STREAM);
+
+    // Streaming main frames
+    } else if (state == STATE_STREAMING) {
+
+      // Unsupported register detected
+      if (ecuByte == 0xFE && prevEcuByte == (byte)~ECU_COMMAND_READ_REGISTER) {
+        if (DEBUG_SERIAL_PRINT) DebugSerial.println("ERROR: Unsupported register");
+      }
+
+      // Got right data, parsing
+      if (ecuByte == MSG_BYTES_SIZE && prevEcuByte == ECU_REGISTER_NULL) {
+        startFrameReader(FRSTATE_STREAM);
+      }
+
     }
   }
 }
@@ -413,6 +442,17 @@ void postInit() {
 void requestStreaming() {
   stopStream();
   state = STATE_STREAMING;
+
+  /**
+   * This registers is valid for RB25DET NEO Y33 ECU (23710-XXXXX TODO)
+   * 
+   * When ECU responses to ECU_COMMAND_READ_REGISTER it sends something like:
+   * 0xA5 0x0C - It's OK, first byte is inverted 0x5A, second byte is requested register
+   * 0xA5 0x08 - Same
+   * ...
+   * 0xA5 0xFE - Error there, second byte is 0xFE. It means that ECU doesn't supports this and it must be removed
+   * ...
+   * */
   writeEcu(ECU_COMMAND_READ_REGISTER);
   writeEcu(ECU_REGISTER_BATTERY_VOLTAGE);
   writeEcu(ECU_COMMAND_READ_REGISTER);
@@ -423,8 +463,6 @@ void requestStreaming() {
   writeEcu(ECU_REGISTER_LEFT_O2);
   writeEcu(ECU_COMMAND_READ_REGISTER);
   writeEcu(ECU_REGISTER_TPS);
-  writeEcu(ECU_COMMAND_READ_REGISTER);
-  writeEcu(ECU_REGISTER_EGT);
   writeEcu(ECU_COMMAND_READ_REGISTER);
   writeEcu(ECU_REGISTER_AAC_VALVE);
   writeEcu(ECU_COMMAND_READ_REGISTER);
@@ -453,24 +491,14 @@ void requestStreaming() {
 }
 
 /**
- * Write byte to ECU
+ * Read DTC (fault codes)
  * */
-void writeEcu(byte b) {
-  Consult.write((byte)b);
-}
-
-/**
- * Read byte from ECU
- * */
-byte readEcu() {
-  return (byte)Consult.read();
-}
-
-/**
- * ECU responds with the same command byte but having inverted all bits as an error check
- * */
-boolean errorCheckCommandByte(byte commandByte, byte errorCheckByte) {
-  return commandByte == (byte)~errorCheckByte;
+void readFaultCodes() {
+  forceStopStream = true;
+  stopStream();
+  state = STATE_WAITING_ECU_RESPONSE;
+  writeEcu(ECU_COMMAND_SELF_DIAG);
+  writeEcu(ECU_COMMAND_TERM);
 }
 
 /**
@@ -507,6 +535,27 @@ void resetFrameReader() {
 void resumeMainStream() {
   stopStream();
   forceStopStream = false;
+}
+
+/**
+ * Write byte to ECU
+ * */
+void writeEcu(byte b) {
+  Consult.write((byte)b);
+}
+
+/**
+ * Read byte from ECU
+ * */
+byte readEcu() {
+  return (byte)Consult.read();
+}
+
+/**
+ * ECU responds with the same command byte but having inverted all bits as an error check
+ * */
+boolean errorCheckCommandByte(byte commandByte, byte errorCheckByte) {
+  return commandByte == (byte)~errorCheckByte;
 }
 
 /**
