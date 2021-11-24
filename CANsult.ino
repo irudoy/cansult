@@ -7,6 +7,13 @@
 //////////////////////////////////////////////
 
 //////////////////////////////////////////////
+// Serial
+#define Consult Serial3
+#define DebugSerial Serial
+// Serial
+//////////////////////////////////////////////
+
+//////////////////////////////////////////////
 // ECU Commands
 #define ECU_COMMAND_INIT 0xEF
 #define ECU_COMMAND_NULL 0xFF
@@ -72,8 +79,8 @@
 // STATE
 #define STATE_STARTUP 0
 #define STATE_INITIALIZING 1
-#define STATE_POST_INIT_START 2
-#define STATE_POST_INIT 3
+#define STATE_POST_INIT 2
+#define STATE_WAITING_ECU_RESPONSE 3
 #define STATE_IDLE 4
 #define STATE_STREAMING 5
 
@@ -83,6 +90,7 @@ uint8_t prevState;
 // Frame read state
 #define FRSTATE_STREAM 0
 #define FRSTATE_ECU_INFO 1
+#define FRSTATE_FAULT_CODES 2
 
 uint8_t frameReadState = FRSTATE_STREAM;
 uint8_t frameReadCount = 0;
@@ -94,14 +102,18 @@ byte ecuByte;
 byte prevEcuByte;
 
 byte data[MSG_BYTES_SIZE];
-char ecuPartNo[12];
+char ecuPartNo[11] = { '2', '3', '7', '1', '0', '-' };
 
 unsigned long time;
 unsigned long tempTime;
 
+#define FAULT_CODES_BUFFER_SIZE 64
+uint8_t currentFaultCodesCount = 0;
+byte currentFaultCodes[FAULT_CODES_BUFFER_SIZE];
+
 void setup() {
-  Serial.begin(115200);
-  Serial3.begin(9600);
+  DebugSerial.begin(115200);
+  Consult.begin(9600);
 }
 
 void loop() {
@@ -121,23 +133,44 @@ void loop() {
  * TMP: processing serial commands for debug
  * */
 void processDebugSerial() {
-  if (Serial.available() > 0) {
-    int command = Serial.read();
+  if (DebugSerial.available() > 0) {
+    int command = DebugSerial.read();
+
+    // TMP: Read coodes
+    // 1
+    if (command == 49) {
+      DebugSerial.println("Reading err codes");
+      forceStopStream = true;
+      stopStream();
+      state = STATE_WAITING_ECU_RESPONSE;
+      writeEcu(ECU_COMMAND_SELF_DIAG);
+      writeEcu(ECU_COMMAND_TERM);
+    }
 
     // TMP: Start the stream
-    // 3
+    // 2
     if (command == 50) {
-      Serial.println("Streaming started");
+      DebugSerial.println("Streaming started");
       forceStopStream = false;
       requestStreaming();
     }
 
     // TMP: Force stop the stream
-    // 4
+    // 3
     if (command == 51) {
-      Serial.println("Streaming stopped");
+      DebugSerial.println("Streaming stopped");
       forceStopStream = true;
       stopStream();
+    }
+
+    // TMP: Clear DTC
+    // 4
+    if (command == 52) {
+      DebugSerial.println("Clearing err codes");
+      forceStopStream = true;
+      stopStream();
+      state = STATE_WAITING_ECU_RESPONSE;
+      writeEcu(ECU_COMMAND_CLEAR_CODES);
     }
 
     // TMP: Print all the data
@@ -163,29 +196,43 @@ void processDebugSerial() {
       bool fuelPumpRelay = data[17] & BITMASK_FUEL_PUMP_RELAY;
       bool vtcSolenoid = data[18] & BITMASK_VTC_SOLENOID;
 
-      Serial.print("Voltage: "); Serial.print(voltageMv / 1000.0); Serial.print("V; ");
-      Serial.print("CLT: "); Serial.print(cltDegC); Serial.print("C; ");
-      Serial.print("IGN TIMING: "); Serial.print(ignTimingDegBTDC); Serial.print("; ");
-      Serial.print("O2: "); Serial.print(O2VoltageMv / 1000.0); Serial.print("V; ");
-      Serial.print("TPS: "); Serial.print(TPSVoltageMv / 1000.0); Serial.print("V; ");
-      Serial.print("EGT: "); Serial.print(EGTVoltageMv / 1000.0); Serial.print("V; ");
-      Serial.print("AAC: "); Serial.print(AACValvePerc); Serial.print("%; ");
-      Serial.print("A/F Alpha: "); Serial.print(AFAlphaPerc); Serial.print("%; ");
-      Serial.print("A/F Alpha (Self-Learn): "); Serial.print(AFAlphaSLPerc); Serial.print("%; ");
-      Serial.print("Speed: "); Serial.print(vehicleSpeedKph); Serial.print("km/h; ");
-      Serial.print("Tach: "); Serial.print(rpm); Serial.print("; ");
-      Serial.print("Inj Time: "); Serial.print(injTimeMs); Serial.print("ms; ");
-      Serial.print("MAF: "); Serial.print(mafVoltageMv / 1000.0); Serial.print("V; ");
-      Serial.println();
-      Serial.print("N: "); Serial.print(neutralSwitch ? 1 : 0); Serial.print("; ");
-      Serial.print("ST: "); Serial.print(startSignal ? 1 : 0); Serial.print("; ");
-      Serial.print("TH: "); Serial.print(throttleClosed ? 1 : 0); Serial.print("; ");
-      Serial.print("FP: "); Serial.print(fuelPumpRelay ? 1 : 0); Serial.print("; ");
-      Serial.print("VTC: "); Serial.print(vtcSolenoid ? 1 : 0); Serial.print("; ");
-      Serial.println();
+      DebugSerial.print("Voltage: "); DebugSerial.print(voltageMv / 1000.0); DebugSerial.print("V; ");
+      DebugSerial.print("CLT: "); DebugSerial.print(cltDegC); DebugSerial.print("C; ");
+      DebugSerial.print("IGN TIMING: "); DebugSerial.print(ignTimingDegBTDC); DebugSerial.print("; ");
+      DebugSerial.print("O2: "); DebugSerial.print(O2VoltageMv / 1000.0); DebugSerial.print("V; ");
+      DebugSerial.print("TPS: "); DebugSerial.print(TPSVoltageMv / 1000.0); DebugSerial.print("V; ");
+      DebugSerial.print("EGT: "); DebugSerial.print(EGTVoltageMv / 1000.0); DebugSerial.print("V; ");
+      DebugSerial.print("AAC: "); DebugSerial.print(AACValvePerc); DebugSerial.print("%; ");
+      DebugSerial.print("A/F Alpha: "); DebugSerial.print(AFAlphaPerc); DebugSerial.print("%; ");
+      DebugSerial.print("A/F Alpha (Self-Learn): "); DebugSerial.print(AFAlphaSLPerc); DebugSerial.print("%; ");
+      DebugSerial.print("Speed: "); DebugSerial.print(vehicleSpeedKph); DebugSerial.print("km/h; ");
+      DebugSerial.print("Tach: "); DebugSerial.print(rpm); DebugSerial.print("; ");
+      DebugSerial.print("Inj Time: "); DebugSerial.print(injTimeMs); DebugSerial.print("ms; ");
+      DebugSerial.print("MAF: "); DebugSerial.print(mafVoltageMv / 1000.0); DebugSerial.print("V; ");
+      DebugSerial.println();
+      DebugSerial.print("N: "); DebugSerial.print(neutralSwitch ? 1 : 0); DebugSerial.print("; ");
+      DebugSerial.print("ST: "); DebugSerial.print(startSignal ? 1 : 0); DebugSerial.print("; ");
+      DebugSerial.print("TH: "); DebugSerial.print(throttleClosed ? 1 : 0); DebugSerial.print("; ");
+      DebugSerial.print("FP: "); DebugSerial.print(fuelPumpRelay ? 1 : 0); DebugSerial.print("; ");
+      DebugSerial.print("VTC: "); DebugSerial.print(vtcSolenoid ? 1 : 0); DebugSerial.print("; ");
+      DebugSerial.println();
 
-      Serial.print("ECU Part no: ");
-      Serial.println(ecuPartNo);
+      DebugSerial.print("ECU Part no: ");
+      DebugSerial.println(ecuPartNo);
+
+      if (currentFaultCodes[0] == 0xFF) {
+        DebugSerial.println("No fault codes!");
+      } else {
+        DebugSerial.println("Fault codes:");
+        for (uint8_t i = 0; i < FAULT_CODES_BUFFER_SIZE; i = i + 2) {
+          if (currentFaultCodes[i] != 0xFF) {
+            DebugSerial.print("Code: ");
+            DebugSerial.print(currentFaultCodes[i], HEX);
+            DebugSerial.print(" Starts: ");
+            DebugSerial.println(currentFaultCodes[i + 1], DEC);
+          }
+        }
+      }
     }
   }
 }
@@ -196,23 +243,23 @@ void processDebugSerial() {
 void route() {
   switch (state) {
     case STATE_STARTUP:
-      if (DEBUG_SERIAL_PRINT) Serial.println("Initializing...");
+      if (DEBUG_SERIAL_PRINT) DebugSerial.println("Initializing...");
       initECU();
       break;
     case STATE_INITIALIZING:
-      break;
-    case STATE_POST_INIT_START:
-      if (DEBUG_SERIAL_PRINT) Serial.println("Requesting ECU part number");
-      postInit();
-      break;
-    case STATE_POST_INIT:
       if (time - tempTime > 1000) {
         state = STATE_STARTUP;
       }
       break;
+    case STATE_POST_INIT:
+      if (DEBUG_SERIAL_PRINT) DebugSerial.println("Requesting ECU part number");
+      postInit();
+      break;
+    case STATE_WAITING_ECU_RESPONSE:
+      break;
     case STATE_IDLE:
       if (!forceStopStream) {
-        if (DEBUG_SERIAL_PRINT) Serial.println("Requesting stream...");
+        if (DEBUG_SERIAL_PRINT) DebugSerial.println("Requesting stream...");
         requestStreaming();
       }
       break;
@@ -227,17 +274,17 @@ void route() {
  * Main ECU response processor
  * */
 void processECUInputByte() {
-  if (Serial3.available() > 0) {
+  if (Consult.available() > 0) {
     prevEcuByte = ecuByte;
     ecuByte = readEcu();
 
     if (DEBUG_INPUT_BYTES) {
-      Serial.print(ecuByte, HEX);
-      Serial.print(" ");
+      DebugSerial.print(ecuByte, HEX);
+      DebugSerial.print(" ");
       if (prevEcuByte == ECU_REGISTER_NULL && ecuByte == MSG_BYTES_SIZE) {
-        Serial.println();
+        DebugSerial.println();
       } else {
-        Serial.print(" ");
+        DebugSerial.print(" ");
       }
     }
 
@@ -247,41 +294,59 @@ void processECUInputByte() {
           data[frameReadCount] = ecuByte;
           frameReadCount++;
           if (frameReadCount == MSG_BYTES_SIZE) {
-            needReadFrame = false;
-            frameReadCount = 0;
+            resetFrameReader();
           }
           break;
         case FRSTATE_ECU_INFO:
-          if (frameReadCount >= 18) {
-            ecuPartNo[frameReadCount - 18 + 6] = (char)ecuByte;
+          if (frameReadCount >= 19) {
+            ecuPartNo[frameReadCount - 19 + 6] = (char)ecuByte;
           }
           frameReadCount++;
-          if (frameReadCount == 23) {
-            needReadFrame = false;
-            frameReadCount = 0;
-            if (DEBUG_SERIAL_PRINT) Serial.println("Got ECU Part Number");
+          if (frameReadCount == 24) {
+            resetFrameReader();
+            if (DEBUG_SERIAL_PRINT) DebugSerial.println("Got ECU Part Number");
             stopStream();
+          }
+          break;
+        case FRSTATE_FAULT_CODES:
+          if (prevEcuByte == ECU_REGISTER_NULL) {
+            currentFaultCodesCount = ecuByte;
+          } else if (ecuByte != ECU_REGISTER_NULL) {
+            currentFaultCodes[frameReadCount] = ecuByte;
+            frameReadCount++;
+            if (frameReadCount == currentFaultCodesCount) {
+              if (DEBUG_SERIAL_PRINT) {
+                DebugSerial.print("Got ");
+                DebugSerial.print(currentFaultCodesCount / 2);
+                DebugSerial.println(" fault codes");
+              }
+              resetFrameReader();
+              resumeMainStream();
+            }
           }
           break;
         default:
           break;
       }
     } else if (state == STATE_INITIALIZING && errorCheckCommandByte(ecuByte, ECU_COMMAND_INIT)) {
-      state = STATE_POST_INIT_START;
-      if (DEBUG_SERIAL_PRINT) Serial.println("Initialized succesfully!");
-    } else if (state == STATE_POST_INIT && errorCheckCommandByte(ecuByte, ECU_COMMAND_ECU_INFO)) {
-      if (DEBUG_SERIAL_PRINT) Serial.println("Reading part number");
-      needReadFrame = true;
-      frameReadState = FRSTATE_ECU_INFO;
-      ecuPartNo[0] = '2';
-      ecuPartNo[1] = '3';
-      ecuPartNo[2] = '7';
-      ecuPartNo[3] = '1';
-      ecuPartNo[4] = '0';
-      ecuPartNo[5] = '-';
+      state = STATE_POST_INIT;
+      if (DEBUG_SERIAL_PRINT) DebugSerial.println("Initialized succesfully!");
+    } else if (state == STATE_WAITING_ECU_RESPONSE) {
+      if (errorCheckCommandByte(ecuByte, ECU_COMMAND_ECU_INFO)) {
+        if (DEBUG_SERIAL_PRINT) DebugSerial.println("Reading part number");
+        startFrameReader(FRSTATE_ECU_INFO);
+      }
+      if (errorCheckCommandByte(ecuByte, ECU_COMMAND_SELF_DIAG)) {
+        if (DEBUG_SERIAL_PRINT) DebugSerial.println("Reading fault codes");
+        startFrameReader(FRSTATE_FAULT_CODES);
+        resetFaultCodesReader();
+      }
+      if (errorCheckCommandByte(ecuByte, ECU_COMMAND_CLEAR_CODES)) {
+        if (DEBUG_SERIAL_PRINT) DebugSerial.println("Fault codes cleared succesfully");
+        resumeMainStream();
+      }
     } else if (state == STATE_STREAMING && ecuByte == MSG_BYTES_SIZE && prevEcuByte == ECU_REGISTER_NULL) {
-      needReadFrame = true;
-      frameReadState = FRSTATE_STREAM;
+      startFrameReader(FRSTATE_STREAM);
     }
   }
 }
@@ -291,15 +356,15 @@ void processECUInputByte() {
  * */
 void logStateChange() {
   if (state != prevState) {
-    Serial.print("State changed: ");
+    DebugSerial.print("State changed: ");
     switch (state) {
-      case STATE_STARTUP: Serial.println("STATE_STARTUP"); break;
-      case STATE_INITIALIZING: Serial.println("STATE_INITIALIZING"); break;
-      case STATE_POST_INIT_START: Serial.println("STATE_POST_INIT_START"); break;
-      case STATE_POST_INIT: Serial.println("STATE_POST_INIT"); break;
-      case STATE_IDLE: Serial.println("STATE_IDLE"); break;
-      case STATE_STREAMING: Serial.println("STATE_STREAMING"); break;
-      default: Serial.println(state); break;
+      case STATE_STARTUP: DebugSerial.println("STATE_STARTUP"); break;
+      case STATE_INITIALIZING: DebugSerial.println("STATE_INITIALIZING"); break;
+      case STATE_POST_INIT: DebugSerial.println("STATE_POST_INIT"); break;
+      case STATE_WAITING_ECU_RESPONSE: DebugSerial.println("STATE_WAITING_ECU_RESPONSE"); break;
+      case STATE_IDLE: DebugSerial.println("STATE_IDLE"); break;
+      case STATE_STREAMING: DebugSerial.println("STATE_STREAMING"); break;
+      default: DebugSerial.println(state); break;
     }
   }
   prevState = state;
@@ -310,6 +375,8 @@ void logStateChange() {
  * Doing it twice
  * 
  * Switching state to STATE_INITIALIZING
+ * 
+ * Also storing current time there, for future stuck checks
  * */
 void initECU() {
   stopStream();
@@ -320,22 +387,20 @@ void initECU() {
   writeEcu(ECU_COMMAND_NULL);
   writeEcu(ECU_COMMAND_NULL);
   writeEcu(ECU_COMMAND_INIT);
+  tempTime = time;
 }
 
 /**
  * Request some after-init data
  * Eg Ecu Part Number
  * 
- * Switching state to STATE_POST_INIT
- * 
- * Also storing cuurent time there, for future stuck checks
+ * Switching state to STATE_WAITING_ECU_RESPONSE
  * */
 void postInit() {
   stopStream();
-  state = STATE_POST_INIT;
+  state = STATE_WAITING_ECU_RESPONSE;
   writeEcu(ECU_COMMAND_ECU_INFO);
   writeEcu(ECU_COMMAND_TERM);
-  tempTime = time;
 }
 
 /**
@@ -391,21 +456,57 @@ void requestStreaming() {
  * Write byte to ECU
  * */
 void writeEcu(byte b) {
-  Serial3.write((byte)b);
+  Consult.write((byte)b);
 }
 
 /**
  * Read byte from ECU
  * */
 byte readEcu() {
-  return (byte)Serial3.read();
+  return (byte)Consult.read();
 }
 
 /**
  * ECU responds with the same command byte but having inverted all bits as an error check
  * */
 boolean errorCheckCommandByte(byte commandByte, byte errorCheckByte) {
-  return commandByte != (byte)~errorCheckByte;
+  return commandByte == (byte)~errorCheckByte;
+}
+
+/**
+ * Reset fault codes count
+ * Fill buffer with 0xFF
+ * */
+void resetFaultCodesReader() {
+  currentFaultCodesCount = 0;
+  for (uint8_t i = 0; i < FAULT_CODES_BUFFER_SIZE; i++) {
+    currentFaultCodes[i] = 0xFF;
+  }
+}
+
+/**
+ * Start frame reader with state
+ * */
+void startFrameReader(uint8_t frstate) {
+  frameReadState = frstate;
+  needReadFrame = true;
+  frameReadCount = 0;
+}
+
+/**
+ * Reset frame reader
+ * */
+void resetFrameReader() {
+  needReadFrame = false;
+  frameReadCount = 0;
+}
+
+/**
+ * Stop current stream and disable forceStopStream
+ * */
+void resumeMainStream() {
+  stopStream();
+  forceStopStream = false;
 }
 
 /**
@@ -417,14 +518,11 @@ boolean errorCheckCommandByte(byte commandByte, byte errorCheckByte) {
  * */
 void stopStream() {
   state = STATE_IDLE;
-
-  needReadFrame = false;
-  frameReadCount = 0;
-
+  resetFrameReader();
   writeEcu(ECU_COMMAND_STOP_STREAM);
   delay(100);
-  Serial3.flush();
-  while (Serial3.available() > 0) {
-    Serial3.read();
+  Consult.flush();
+  while (Consult.available() > 0) {
+    Consult.read();
   }
 }
