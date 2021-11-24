@@ -224,7 +224,9 @@ void processDebugSerial() {
           if (currentFaultCodes[i] != 0xFF) {
             DebugSerial.print("Code: ");
             DebugSerial.print(currentFaultCodes[i], HEX);
-            DebugSerial.print(" Starts: ");
+            DebugSerial.print(" - ");
+            printDTCDescriptionByCode(currentFaultCodes[i]);
+            DebugSerial.print("; Starts: ");
             DebugSerial.println(currentFaultCodes[i + 1], DEC);
           }
         }
@@ -573,5 +575,28 @@ void stopStream() {
   Consult.flush();
   while (Consult.available() > 0) {
     Consult.read();
+  }
+}
+
+void printDTCDescriptionByCode(byte code) {
+  switch (code) {
+    case 0x11: DebugSerial.print("CRANKSHAFT POSITION SENSOR"); break;
+    case 0x12: DebugSerial.print("MASS AIRFLOW SENSOR"); break;
+    case 0x13: DebugSerial.print("ENGINE COOLANT TEMPERATURE SENSOR"); break;
+    case 0x14: DebugSerial.print("VEHICLE SPEED SENSOR"); break;
+    case 0x21: DebugSerial.print("IGNITION SIGNAL"); break;
+    case 0x31: DebugSerial.print("ECM"); break;
+    case 0x32: DebugSerial.print("EGR FUNCTION"); break;
+    case 0x33: DebugSerial.print("OXYGEN SENSOR"); break;
+    case 0x34: DebugSerial.print("KNOCK SENSOR"); break;
+    case 0x35: DebugSerial.print("EGR TEMPERATURE SENSOR"); break;
+    case 0x42: DebugSerial.print("FUEL TEMPERATURE SENSOR"); break;
+    case 0x43: DebugSerial.print("THROTTLE POSITION SENSOR"); break;
+    case 0x45: DebugSerial.print("INJECTOR LEAK"); break;
+    case 0x51: DebugSerial.print("INJECTOR CIRCUIT"); break;
+    case 0x53: DebugSerial.print("OXYGEN SENSOR"); break;
+    case 0x55: DebugSerial.print("NO MALFUNCTION"); break;
+    case 0x54: DebugSerial.print("AUTO TRANSMISSION SIGNAL"); break;
+    default: DebugSerial.print("UNKNOWN"); break;
   }
 }
