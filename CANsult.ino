@@ -1,3 +1,6 @@
+#include <SPI.h>
+#include <mcp2515.h>
+
 //////////////////////////////////////////////
 // Debug control
 #define DEBUG_STATE true
@@ -7,11 +10,34 @@
 //////////////////////////////////////////////
 
 //////////////////////////////////////////////
-// Serial
+// Comm
 #define Consult Serial3
 #define DebugSerial Serial
-// Serial
+#define CAN_SPI_CS_PIN 53
+#define CAN_SPEED CAN_500KBPS
+#define CAN_ID_1 0x666
+#define CAN_ID_2 0x667
+#define CAN_ID_3 0x668
+#define RATE_10HZ 100ul
+#define RATE_20HZ 50ul
+#define RATE_30HZ 33ul
+#define RATE_40HZ 25ul
+#define FRAME_SEND_RATE RATE_20HZ
+// Comm
 //////////////////////////////////////////////
+
+/**
+ * # CAN Protocol
+ * 
+ * ## Stream
+ * 
+ * |  ID   | DLC |     Byte 0      |    Byte 1    |     Byte 2      |    Byte 3    |    Byte 4    |    Byte 5    |     Byte 6     |         Byte 7          |
+ * |-------|-----|-----------------|--------------|-----------------|--------------|--------------|--------------|----------------|-------------------------|
+ * | 0x666 |   8 | BATTERY_VOLTAGE | COOLANT_TEMP | IGNITION_TIMING | LEFT_O2      | TPS          | AAC_VALVE    | LEFT_AF_ALPHA  | LEFT_AF_ALPHA_SELFLEARN |
+ * | 0x667 |   8 | VEHICLE_SPEED   | TACH_MSB     | TACH_LSB        | INJ_TIME_MSB | INJ_TIME_LSB | LEFT_MAF_MSB | LEFT_MAF_LSB   |                         |
+ * | 0x668 |   8 | BIT_1           | BIT_2        |                 |              |              |              | First DTC Code | Heartbeat               |
+ * 
+ * */
 
 //////////////////////////////////////////////
 // ECU Commands
@@ -104,18 +130,39 @@ byte prevEcuByte;
 byte data[MSG_BYTES_SIZE];
 char ecuPartNo[11] = { '2', '3', '7', '1', '0', '-' };
 
+uint8_t heartbeat = 0;
+
 unsigned long time;
 unsigned long tempTime;
+unsigned long lastFrameSentTime;
 
 #define FAULT_CODES_BUFFER_SIZE 64
 uint8_t currentFaultCodesCount = 0;
 byte currentFaultCodes[FAULT_CODES_BUFFER_SIZE];
+
+MCP2515 mcp2515(CAN_SPI_CS_PIN);
+
+struct can_frame dataFrame1;
+struct can_frame dataFrame2;
+struct can_frame dataFrame3;
+struct can_frame frameRX;
 
 void setup() {
   DebugSerial.begin(115200);
   Consult.begin(9600);
 
   resetFaultCodesReader();
+
+  mcp2515.reset();
+  mcp2515.setBitrate(CAN_SPEED, MCP_8MHZ);
+  mcp2515.setNormalMode();
+
+  dataFrame1.can_id = CAN_ID_1;
+  dataFrame1.can_dlc = 8;
+  dataFrame2.can_id = CAN_ID_2;
+  dataFrame2.can_dlc = 8;
+  dataFrame3.can_id = CAN_ID_3;
+  dataFrame3.can_dlc = 8;
 }
 
 void loop() {
@@ -129,6 +176,12 @@ void loop() {
   processECUInputByte();
 
   processDebugSerial();
+
+  // if (mcp2515.readMessage(&frameRX) == MCP2515::ERROR_OK) {
+  //   DebugSerial.println(frameRX.can_id);
+  //   DebugSerial.println(frameRX.can_dlc);
+  //   DebugSerial.println(frameRX.data[0]);
+  // }
 }
 
 /**
@@ -179,19 +232,20 @@ void processDebugSerial() {
       int ignTimingDegBTDC = 110 - data[2];
       int O2VoltageMv = data[3] * 10;
       int TPSVoltageMv = data[4] * 20;
-      int AACValvePerc = data[6] / 2;
-      int AFAlphaPerc = data[7];
-      int AFAlphaSLPerc = data[8];
-      int vehicleSpeedKph = data[9] * 2;
-      int rpm = ((data[10] << 8) + data[11]) * 12.5;
-      float injTimeMs = ((data[12] << 8) + data[13]) / 100.0;
-      int mafVoltageMv = ((data[14] << 8) + data[15]) * 5;
+      int AACValvePerc = data[5] / 2;
+      int AFAlphaPerc = data[6];
+      int AFAlphaSLPerc = data[7];
 
-      bool neutralSwitch = data[16] & BITMASK_NEUTRAL_SW;
-      bool startSignal = data[16] & BITMASK_START_SIGNAL;
-      bool throttleClosed = data[16] & BITMASK_THROTTLE_CLOSED;
-      bool fuelPumpRelay = data[17] & BITMASK_FUEL_PUMP_RELAY;
-      bool vtcSolenoid = data[18] & BITMASK_VTC_SOLENOID;
+      int vehicleSpeedKph = data[8] * 2;
+      int rpm = ((data[9] << 8) + data[10]) * 12.5;
+      float injTimeMs = ((data[11] << 8) + data[12]) / 100.0;
+      int mafVoltageMv = ((data[13] << 8) + data[14]) * 5;
+
+      bool neutralSwitch = data[15] & BITMASK_NEUTRAL_SW;
+      bool startSignal = data[15] & BITMASK_START_SIGNAL;
+      bool throttleClosed = data[15] & BITMASK_THROTTLE_CLOSED;
+      bool fuelPumpRelay = data[16] & BITMASK_FUEL_PUMP_RELAY;
+      bool vtcSolenoid = data[16] & BITMASK_VTC_SOLENOID;
 
       DebugSerial.print("Voltage: "); DebugSerial.print(voltageMv / 1000.0); DebugSerial.print("V; ");
       DebugSerial.print("CLT: "); DebugSerial.print(cltDegC); DebugSerial.print("C; ");
@@ -245,7 +299,7 @@ void route() {
       initECU();
       break;
     case STATE_INITIALIZING:
-      if (time - tempTime > 1000) {
+      if (time - tempTime > 1000ul) {
         state = STATE_STARTUP;
       }
       break;
@@ -262,6 +316,43 @@ void route() {
       }
       break;
     case STATE_STREAMING:
+      if (time - tempTime > 1000ul) {
+        state = STATE_STARTUP;
+      }
+      if (time - lastFrameSentTime > FRAME_SEND_RATE) {        
+        dataFrame1.data[0] = data[0];
+        dataFrame1.data[1] = data[1];
+        dataFrame1.data[2] = data[2];
+        dataFrame1.data[3] = data[3];
+        dataFrame1.data[4] = data[4];
+        dataFrame1.data[5] = data[5];
+        dataFrame1.data[6] = data[6];
+        dataFrame1.data[7] = data[7];
+
+        dataFrame2.data[0] = data[8];
+        dataFrame2.data[1] = data[9];
+        dataFrame2.data[2] = data[10];
+        dataFrame2.data[3] = data[11];
+        dataFrame2.data[4] = data[12];
+        dataFrame2.data[5] = data[13];
+        dataFrame2.data[6] = data[14];
+        dataFrame2.data[7] = 0xFF;
+
+        dataFrame3.data[0] = data[15];
+        dataFrame3.data[1] = data[16];
+        dataFrame3.data[2] = 0xFF;
+        dataFrame3.data[3] = 0xFF;
+        dataFrame3.data[4] = 0xFF;
+        dataFrame3.data[5] = 0xFF;
+        dataFrame3.data[6] = currentFaultCodes[0];
+        dataFrame3.data[7] = heartbeat;
+
+        mcp2515.sendMessage(&dataFrame1);
+        mcp2515.sendMessage(&dataFrame2);
+        mcp2515.sendMessage(&dataFrame3);
+        lastFrameSentTime = time;
+        heartbeat = heartbeat == 255 ? 0 : heartbeat + 1;
+      }
       break;
     default:
       break;
@@ -288,6 +379,8 @@ void processECUInputByte() {
 
     // Reading ECU response byte-by-byte
     if (needReadFrame) {
+
+      tempTime = time; // reading ECU, streaming OK
 
       switch (frameReadState) {
 
