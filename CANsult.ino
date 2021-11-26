@@ -102,6 +102,12 @@
 // STREAM FRAME SIZE
 #define MSG_BYTES_SIZE 17
 
+// STATUS LED PIN
+#define LED_PIN LED_BUILTIN
+#define LED_BLINK_INTERVAL_FAST 100ul
+#define LED_BLINK_INTERVAL_MEDIUM 500ul
+#define LED_BLINK_INTERVAL_SLOW 1000ul
+
 // STATE
 #define STATE_STARTUP 0
 #define STATE_INITIALIZING 1
@@ -135,6 +141,7 @@ uint8_t heartbeat = 0;
 unsigned long time;
 unsigned long tempTime;
 unsigned long lastFrameSentTime;
+unsigned long lastLedUpdatedTime;
 
 #define FAULT_CODES_BUFFER_SIZE 64
 uint8_t currentFaultCodesCount = 0;
@@ -147,12 +154,19 @@ struct can_frame dataFrame2;
 struct can_frame dataFrame3;
 struct can_frame frameRX;
 
+bool blink = false;
+uint8_t ledState = LOW;
+unsigned long currentLedInterval = LED_BLINK_INTERVAL_FAST;
+
 void setup() {
   DebugSerial.begin(115200);
   Consult.begin(9600);
 
+  pinMode(LED_PIN, OUTPUT);
+
   resetFaultCodesReader();
 
+  // TODO: indicate errors maybe?
   mcp2515.reset();
   mcp2515.setBitrate(CAN_SPEED, MCP_8MHZ);
   mcp2515.setNormalMode();
@@ -177,6 +191,13 @@ void loop() {
 
   processDebugSerial();
 
+  if (blink && time - lastLedUpdatedTime >= currentLedInterval) {
+    lastLedUpdatedTime = time;
+    ledState = ledState == LOW ? HIGH : LOW;
+    digitalWrite(LED_PIN, ledState);
+  }
+
+  // TODO: Interrupts?
   // if (mcp2515.readMessage(&frameRX) == MCP2515::ERROR_OK) {
   //   DebugSerial.println(frameRX.can_id);
   //   DebugSerial.println(frameRX.can_dlc);
@@ -297,25 +318,31 @@ void route() {
     case STATE_STARTUP:
       if (DEBUG_SERIAL_PRINT) DebugSerial.println("Initializing...");
       initECU();
+      ledBlinkFast();
       break;
     case STATE_INITIALIZING:
       if (time - tempTime > 1000ul) {
         state = STATE_STARTUP;
       }
+      ledBlinkFast();
       break;
     case STATE_POST_INIT:
       if (DEBUG_SERIAL_PRINT) DebugSerial.println("Requesting ECU part number");
       postInit();
+      ledBlinkMedium();
       break;
     case STATE_WAITING_ECU_RESPONSE:
+      ledBlinkMedium();
       break;
     case STATE_IDLE:
       if (!forceStopStream) {
         if (DEBUG_SERIAL_PRINT) DebugSerial.println("Requesting stream...");
         requestStreaming();
       }
+      ledBlinkFast();
       break;
     case STATE_STREAMING:
+      ledBlinkSlow();
       if (time - tempTime > 1000ul) {
         state = STATE_STARTUP;
       }
@@ -692,4 +719,19 @@ void printDTCDescriptionByCode(byte code) {
     case 0x54: DebugSerial.print("AUTO TRANSMISSION SIGNAL"); break;
     default: DebugSerial.print("UNKNOWN"); break;
   }
+}
+
+void ledBlinkFast() {
+  blink = true;
+  currentLedInterval = LED_BLINK_INTERVAL_FAST;
+}
+
+void ledBlinkMedium() {
+  blink = true;
+  currentLedInterval = LED_BLINK_INTERVAL_MEDIUM;
+}
+
+void ledBlinkSlow() {
+  blink = true;
+  currentLedInterval = LED_BLINK_INTERVAL_SLOW;
 }
