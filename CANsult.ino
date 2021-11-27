@@ -3,17 +3,18 @@
 
 //////////////////////////////////////////////
 // Debug control
-#define DEBUG_STATE true
-#define DEBUG_SERIAL_PRINT true
+#define DEBUG_STATE false
+#define DEBUG_SERIAL_PRINT false
 #define DEBUG_INPUT_BYTES false
 // Debug control
 //////////////////////////////////////////////
 
 //////////////////////////////////////////////
 // Comm
-#define Consult Serial3
-#define DebugSerial Serial
-#define CAN_SPI_CS_PIN 53
+#define Consult Serial
+#define DebugSerial Serial // Only for debug
+#define CAN_SPI_CS_PIN 10
+#define LED_PIN 7
 #define CAN_SPEED CAN_500KBPS
 #define CAN_ID_1 0x666
 #define CAN_ID_2 0x667
@@ -102,8 +103,7 @@
 // STREAM FRAME SIZE
 #define MSG_BYTES_SIZE 17
 
-// STATUS LED PIN
-#define LED_PIN LED_BUILTIN
+// STATUS LED
 #define LED_BLINK_INTERVAL_FAST 100ul
 #define LED_BLINK_INTERVAL_MEDIUM 500ul
 #define LED_BLINK_INTERVAL_SLOW 1000ul
@@ -159,7 +159,9 @@ uint8_t ledState = LOW;
 unsigned long currentLedInterval = LED_BLINK_INTERVAL_FAST;
 
 void setup() {
-  DebugSerial.begin(115200);
+  if (DEBUG_SERIAL_PRINT) {
+    DebugSerial.begin(115200);
+  }
   Consult.begin(9600);
 
   pinMode(LED_PIN, OUTPUT);
@@ -182,14 +184,15 @@ void setup() {
 void loop() {
   time = millis();
 
-  if (DEBUG_STATE) {
+  if (DEBUG_STATE && DEBUG_SERIAL_PRINT) {
     logStateChange();
+  }
+  if (DEBUG_SERIAL_PRINT) {
+    processDebugSerial();
   }
 
   route();
   processECUInputByte();
-
-  processDebugSerial();
 
   if (blink && time - lastLedUpdatedTime >= currentLedInterval) {
     lastLedUpdatedTime = time;
@@ -394,7 +397,7 @@ void processECUInputByte() {
     prevEcuByte = ecuByte;
     ecuByte = readEcu();
 
-    if (DEBUG_INPUT_BYTES) {
+    if (DEBUG_INPUT_BYTES && DEBUG_SERIAL_PRINT) {
       DebugSerial.print(ecuByte, HEX);
       DebugSerial.print(" ");
       if (prevEcuByte == ECU_REGISTER_NULL && ecuByte == MSG_BYTES_SIZE) {
