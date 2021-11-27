@@ -14,7 +14,10 @@
 #define Consult Serial
 #define DebugSerial Serial // Only for debug
 #define CAN_SPI_CS_PIN 10
-#define LED_PIN 7
+#define LED_PIN 9
+#define VM_PIN 0
+#define VM_R1 2000.00 // 10K
+#define VM_R2 1000.00 // 1K
 #define CAN_SPEED CAN_500KBPS
 #define CAN_ID_1 0x666
 #define CAN_ID_2 0x667
@@ -36,7 +39,7 @@
  * |-------|-----|-----------------|--------------|-----------------|--------------|--------------|--------------|----------------|-------------------------|
  * | 0x666 |   8 | BATTERY_VOLTAGE | COOLANT_TEMP | IGNITION_TIMING | LEFT_O2      | TPS          | AAC_VALVE    | LEFT_AF_ALPHA  | LEFT_AF_ALPHA_SELFLEARN |
  * | 0x667 |   8 | VEHICLE_SPEED   | TACH_MSB     | TACH_LSB        | INJ_TIME_MSB | INJ_TIME_LSB | LEFT_MAF_MSB | LEFT_MAF_LSB   |                         |
- * | 0x668 |   8 | BIT_1           | BIT_2        |                 |              |              |              | First DTC Code | Heartbeat               |
+ * | 0x668 |   8 | BIT_1           | BIT_2        | DEVICE_VOLTAGE  |              |              |              | First DTC Code | Heartbeat               |
  * 
  * */
 
@@ -158,6 +161,10 @@ bool blink = false;
 uint8_t ledState = LOW;
 unsigned long currentLedInterval = LED_BLINK_INTERVAL_FAST;
 
+float Vout = 0.00;
+float Vin = 0.00;
+int vmValue = 0;
+
 void setup() {
   if (DEBUG_SERIAL_PRINT) {
     DebugSerial.begin(115200);
@@ -165,6 +172,7 @@ void setup() {
   Consult.begin(9600);
 
   pinMode(LED_PIN, OUTPUT);
+  pinMode(VM_PIN, INPUT);
 
   resetFaultCodesReader();
 
@@ -193,6 +201,7 @@ void loop() {
 
   route();
   processECUInputByte();
+  readVoltage();
 
   if (blink && time - lastLedUpdatedTime >= currentLedInterval) {
     lastLedUpdatedTime = time;
@@ -209,7 +218,7 @@ void loop() {
 }
 
 /**
- * TMP: processing serial commands for debug
+ * Processing serial commands for debug
  * */
 void processDebugSerial() {
   if (DebugSerial.available() > 0) {
@@ -370,7 +379,7 @@ void route() {
 
         dataFrame3.data[0] = data[15];
         dataFrame3.data[1] = data[16];
-        dataFrame3.data[2] = 0xFF;
+        dataFrame3.data[2] = (byte)(Vin * 1000 / 80);
         dataFrame3.data[3] = 0xFF;
         dataFrame3.data[4] = 0xFF;
         dataFrame3.data[5] = 0xFF;
@@ -503,6 +512,15 @@ void processECUInputByte() {
 
     }
   }
+}
+
+/**
+ * Read device voltage
+ * */
+void readVoltage() {
+  vmValue = analogRead(VM_PIN);
+  Vout = (vmValue * 5.17) / 1024.00;
+  Vin = Vout / (VM_R2 / (VM_R1 + VM_R2));
 }
 
 /**
