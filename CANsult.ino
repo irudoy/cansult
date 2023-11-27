@@ -14,8 +14,8 @@
 #define Consult Serial
 #define DebugSerial Serial // Only for debug
 #define CAN_SPI_CS_PIN 10
-#define LED_PIN 9
-#define VM_PIN 0
+#define LED_PIN A3
+#define LED2_PIN A2
 #define VM_R1 2000.00 // 10K
 #define VM_R2 1000.00 // 1K
 #define CAN_SPEED CAN_500KBPS
@@ -169,10 +169,14 @@ void setup() {
   if (DEBUG_SERIAL_PRINT) {
     DebugSerial.begin(115200);
   }
-  Consult.begin(9600);
+  // tmp: fix wrong counter pin
+  // should be Q5 for 9600
+  // Q4 - 19200 baud - 4915.2 / 2^4 = 307.2 Khz
+  // Q5 - 9600 baud - 4915.2 / 2^5 = 153.6 Khz
+  Consult.begin(19200);
 
   pinMode(LED_PIN, OUTPUT);
-  pinMode(VM_PIN, INPUT);
+  pinMode(LED2_PIN, OUTPUT);
 
   resetFaultCodesReader();
 
@@ -192,6 +196,8 @@ void setup() {
 void loop() {
   time = millis();
 
+  digitalWrite(LED2_PIN, HIGH);
+
   if (DEBUG_STATE && DEBUG_SERIAL_PRINT) {
     logStateChange();
   }
@@ -201,7 +207,6 @@ void loop() {
 
   route();
   processECUInputByte();
-  readVoltage();
 
   if (blink && time - lastLedUpdatedTime >= currentLedInterval) {
     lastLedUpdatedTime = time;
@@ -224,7 +229,7 @@ void processDebugSerial() {
   if (DebugSerial.available() > 0) {
     int command = DebugSerial.read();
 
-    // TMP: Read coodes
+    // TMP: Read codes
     // 1
     if (command == 49) {
       DebugSerial.println("Reading err codes");
@@ -512,15 +517,6 @@ void processECUInputByte() {
 
     }
   }
-}
-
-/**
- * Read device voltage
- * */
-void readVoltage() {
-  vmValue = analogRead(VM_PIN);
-  Vout = (vmValue * 5.17) / 1024.00;
-  Vin = Vout / (VM_R2 / (VM_R1 + VM_R2));
 }
 
 /**
