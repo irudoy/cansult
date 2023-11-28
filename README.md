@@ -6,5 +6,5 @@ TODO: add project description and purpose
 * MCP2562
 * MC74HC4060
 
-<img src="hardware/export/pcb-f.jpg" />
-<img src="hardware/export/pcb-b.jpg" />
+<img src="hardware/export/pcb-f.png" />
+<img src="hardware/export/pcb-b.png" />
