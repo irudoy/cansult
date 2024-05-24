@@ -29,7 +29,7 @@ fp-info-cache
 *.ses
 
 # Exported BOM files
-*.xml
-*.csv
+# *.xml
+# *.csv
 
 *.lck
