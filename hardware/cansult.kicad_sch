@@ -38,7 +38,7 @@
 
 
   (symbol (lib_id "Mechanical:MountingHole") (at 27.94 100.33 0) (unit 1)
-    (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced)
+    (in_bom no) (on_board yes) (dnp no) (fields_autoplaced)
     (uuid 76a13436-22bc-4aa3-b70a-2ec4e287ab47)
     (property "Reference" "H2" (at 30.48 99.695 0)
       (effects (font (size 1.27 1.27)) (justify left))
@@ -52,6 +52,9 @@
     (property "Datasheet" "~" (at 27.94 100.33 0)
       (effects (font (size 1.27 1.27)) hide)
     )
+    (property "LCSC" "NA" (at 27.94 100.33 0)
+      (effects (font (size 1.27 1.27)) hide)
+    )
     (instances
       (project "cansult"
         (path "/00cfbbd0-bf42-4890-b157-4848a452e2e0"
@@ -62,7 +65,7 @@
   )
 
   (symbol (lib_id "Mechanical:MountingHole") (at 27.94 91.44 0) (unit 1)
-    (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced)
+    (in_bom no) (on_board yes) (dnp no) (fields_autoplaced)
     (uuid e6eb03fb-01cd-466a-9bfd-a23ffbc27486)
     (property "Reference" "H1" (at 30.48 90.805 0)
       (effects (font (size 1.27 1.27)) (justify left))
@@ -74,6 +77,9 @@
       (effects (font (size 1.27 1.27)) hide)
     )
     (property "Datasheet" "~" (at 27.94 91.44 0)
+      (effects (font (size 1.27 1.27)) hide)
+    )
+    (property "LCSC" "NA" (at 27.94 91.44 0)
       (effects (font (size 1.27 1.27)) hide)
     )
     (instances
