@@ -1,0 +1,20 @@
+.idea
+.vscode
+.osx.project
+.mxproject
+
+# Eclipse
+.metadata
+.settings
+[Rr]elease
+[Dd]ebug
+*.launch
+
+TouchGFX/build
+
+Thumbs.db
+
+scripts/fonts/out/**/*
+!scripts/fonts/out/.gitkeep
+
+cmake-build-*/

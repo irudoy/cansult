@@ -1,0 +1,98 @@
+#ifndef CANSULT_CANSULT_H
+#define CANSULT_CANSULT_H
+
+#include "main.h"
+#include <stdbool.h>
+
+// Comm
+#define CANSULT_CAN_ID_1 0x666
+#define CANSULT_CAN_ID_2 0x667
+#define CANSULT_CAN_ID_3 0x668
+
+#define CANSULT_RATE_10HZ 100ul
+#define CANSULT_RATE_20HZ 50ul
+#define CANSULT_RATE_30HZ 33ul
+#define CANSULT_RATE_40HZ 25ul
+
+#define CANSULT_DATA_RATE CANSULT_RATE_20HZ
+
+/**
+ * # CAN Protocol
+ *
+ * ## Stream
+ *
+ * |  ID   | DLC |     Byte 0      |    Byte 1    |     Byte 2      |    Byte 3    |    Byte 4    |    Byte 5    |     Byte 6     |         Byte 7          |
+ * |-------|-----|-----------------|--------------|-----------------|--------------|--------------|--------------|----------------|-------------------------|
+ * | 0x666 |   8 | BATTERY_VOLTAGE | COOLANT_TEMP | IGNITION_TIMING | LEFT_O2      | TPS          | AAC_VALVE    | LEFT_AF_ALPHA  | LEFT_AF_ALPHA_SELFLEARN |
+ * | 0x667 |   8 | VEHICLE_SPEED   | TACH_MSB     | TACH_LSB        | INJ_TIME_MSB | INJ_TIME_LSB | LEFT_MAF_MSB | LEFT_MAF_LSB   |                         |
+ * | 0x668 |   8 | BIT_1           | BIT_2        | DEVICE_VOLTAGE  |              |              |              | First DTC Code | Heartbeat               |
+ *
+ * */
+
+// ECU Commands
+#define CANSULT_ECU_COMMAND_INIT 0xEF
+#define CANSULT_ECU_COMMAND_NULL 0xFF
+#define CANSULT_ECU_COMMAND_READ_REGISTER 0x5A
+#define CANSULT_ECU_COMMAND_SELF_DIAG 0xD1
+#define CANSULT_ECU_COMMAND_CLEAR_CODES 0xC1
+#define CANSULT_ECU_COMMAND_ECU_INFO 0xD0
+#define CANSULT_ECU_COMMAND_TERM 0xF0
+#define CANSULT_ECU_COMMAND_STOP_STREAM 0x3
+
+// ECU Registers single-byte
+#define CANSULT_ECU_REGISTER_NULL 0xFF
+#define CANSULT_ECU_REGISTER_COOLANT_TEMP 0x08
+#define CANSULT_ECU_REGISTER_VEHICLE_SPEED 0x0B
+#define CANSULT_ECU_REGISTER_BATTERY_VOLTAGE 0x0C
+#define CANSULT_ECU_REGISTER_IGNITION_TIMING 0x16
+#define CANSULT_ECU_REGISTER_LEFT_O2 0x09
+#define CANSULT_ECU_REGISTER_TPS 0x0D
+#define CANSULT_ECU_REGISTER_EGT 0x12
+#define CANSULT_ECU_REGISTER_AAC_VALVE 0x17
+#define CANSULT_ECU_REGISTER_LEFT_AF_ALPHA 0x1A
+#define CANSULT_ECU_REGISTER_LEFT_AF_ALPHA_SELFLEARN 0x1C
+
+// ECU Registers multi-byte
+#define CANSULT_ECU_REGISTER_TACH_MSB 0x00
+#define CANSULT_ECU_REGISTER_TACH_LSB 0x01
+#define CANSULT_ECU_REGISTER_LEFT_MAF_MSB 0x04
+#define CANSULT_ECU_REGISTER_LEFT_MAF_LSB 0x05
+#define CANSULT_ECU_REGISTER_INJ_TIME_MSB 0x14
+#define CANSULT_ECU_REGISTER_INJ_TIME_LSB 0x15
+
+// ECU digital (Bit) registers
+#define CANSULT_ECU_REGISTER_BIT_1 0x13
+#define CANSULT_ECU_REGISTER_BIT_2 0x1E
+
+// ECU bitmasks for CANSULT_ECU_REGISTER_BIT_1
+#define CANSULT_BITMASK_NEUTRAL_SW 0b00000100
+#define CANSULT_BITMASK_START_SIGNAL 0b00000010
+#define CANSULT_BITMASK_THROTTLE_CLOSED 0b00000001
+
+// ECU bitmasks for CANSULT_ECU_REGISTER_BIT_2
+#define CANSULT_BITMASK_FUEL_PUMP_RELAY 0b01000000
+#define CANSULT_BITMASK_VTC_SOLENOID 0b00100000
+
+// STREAM FRAME SIZE
+#define CANSULT_MSG_BYTES_SIZE 17
+
+// STATE
+#define CANSULT_STATE_STARTUP 0
+#define CANSULT_STATE_INITIALIZING 1
+#define CANSULT_STATE_POST_INIT 2
+#define CANSULT_STATE_WAITING_ECU_RESPONSE 3
+#define CANSULT_STATE_IDLE 4
+#define CANSULT_STATE_STREAMING 5
+
+// Frame read state
+#define CANSULT_FRSTATE_STREAM 0
+#define CANSULT_FRSTATE_ECU_INFO 1
+#define CANSULT_FRSTATE_FAULT_CODES 2
+
+#define CANSULT_FAULT_CODES_BUFFER_SIZE 64
+
+void cansult_init();
+
+void cansult_tick();
+
+#endif //CANSULT_CANSULT_H
