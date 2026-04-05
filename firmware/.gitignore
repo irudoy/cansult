@@ -18,3 +18,8 @@ scripts/fonts/out/**/*
 !scripts/fonts/out/.gitkeep
 
 cmake-build-*/
+
+# Test binaries
+test/test_*
+!test/test_*.c
+test/*.dSYM/

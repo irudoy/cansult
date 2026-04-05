@@ -4,6 +4,8 @@
 #include "main.h"
 #include <stdbool.h>
 
+#define CANSULT_DEBUG 1
+
 // Comm
 #define CANSULT_CAN_ID_1 0x666
 #define CANSULT_CAN_ID_2 0x667
@@ -37,7 +39,7 @@
 #define CANSULT_ECU_COMMAND_CLEAR_CODES 0xC1
 #define CANSULT_ECU_COMMAND_ECU_INFO 0xD0
 #define CANSULT_ECU_COMMAND_TERM 0xF0
-#define CANSULT_ECU_COMMAND_STOP_STREAM 0x3
+#define CANSULT_ECU_COMMAND_STOP_STREAM 0x30
 
 // ECU Registers single-byte
 #define CANSULT_ECU_REGISTER_NULL 0xFF
@@ -91,8 +93,8 @@
 
 #define CANSULT_FAULT_CODES_BUFFER_SIZE 64
 
-void cansult_init();
-
-void cansult_tick();
+void cansult_init(void);
+void cansult_tick(void);
+void cansult_uart_idle_callback(void);
 
 #endif //CANSULT_CANSULT_H
