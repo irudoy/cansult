@@ -49,7 +49,7 @@ reset:
 # --- Debug (OpenOCD) ---
 
 ocd-server:
-	openocd -f interface/stlink.cfg -c "hla_serial $(STLINK_SN)" -f target/stm32f1x.cfg
+	openocd -f interface/stlink.cfg -c "adapter serial $(STLINK_SN)" -f target/stm32f1x.cfg
 
 ocd-debug: build
 	$(GDB) $(ELF) \
