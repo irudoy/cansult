@@ -210,3 +210,43 @@ void process_dma_rx(void) {
 - **Stack size**: increased 0x400 → 0x800 (HAL_UART_Transmit + DMA drain call depth)
 - **Batch TX**: `requestStreaming()` sends 35 bytes in single HAL call (was 35 separate calls)
 - **ST-Link serial**: pinned in Makefile to prevent cross-flashing
+
+---
+
+## 6. Observed Behavior After Level 1+2 Fixes (2026-04-06)
+
+Data captured via canlogger USB CDC debug stream (`docs/debug_stream.txt`).
+
+### Periodic ECU disconnect pattern
+
+Connection drops every ~40-60 seconds, reconnect takes ~10 seconds:
+
+```
+[176] 0x640 0x666 0x667       ← normal, ~60 frames/sec
+[177] 0x640 0x665(state=00)   ← ECU data lost, reconnect starts
+[178]       0x665(state=01)   ← connecting
+[183]       0x665(state=03)   ← negotiating
+[185]       0x665(state=00)
+[188]       0x665(state=05)   ← streaming resumed
+[188] 0x640 0x666 0x667       ← data back, ~60 frames/sec
+[217]                         ← same cycle again after ~40s
+```
+
+State transitions during reconnect: `05→00→01→00→01→03→00→03→04→05`
+
+### Key observations
+
+1. **Drop duration**: ~10-12 seconds each reconnect cycle
+2. **Drop interval**: ~40-60 seconds of stable streaming between drops
+3. **Frames during normal**: ~60/sec (3 CAN IDs × 20Hz = expected)
+4. **Frames during reconnect**: ~20/sec (only 0x640 switchboard ADC)
+5. **Level 1+2 fixes work**: reconnect succeeds every time (no permanent hang)
+6. **Root cause still unknown**: ECU streams indefinitely (per spec), so something on cansult side triggers the drop
+
+### TODO
+
+- [ ] Implement Level 3 (CAN robustness: AutoBusOff, TX error handling, IWDG)
+- [ ] Implement Level 4 (error counters and state durations in 0x665)
+- [ ] Add UART error counters (ORE/FE/NE) to debug output to confirm whether drops correlate with UART errors
+- [ ] Test with longer DMA buffer (64→128 bytes) to rule out buffer overruns during CAN TX
+- [ ] Check if CAN TX mailbox full blocks parser drain, causing DMA overrun cascade

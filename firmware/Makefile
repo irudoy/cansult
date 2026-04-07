@@ -14,7 +14,7 @@ STLINK_SN    := 210041000B000057334A534E
 
 # --- Build ---
 
-.PHONY: build clean test flash erase reset debug gdb-server
+.PHONY: build clean test flash erase reset debug gdb-server gdb-read gdb-exec
 
 build:
 	$(CUBEIDE) --launcher.suppressErrors -nosplash \
@@ -73,6 +73,34 @@ ocd-status:
 		-ex "printf \"uartIdleFlag=%d\n\", uartIdleFlag" \
 		-ex "bt" \
 		-ex "monitor resume"
+
+# --- Debug (GDB batch helpers) ---
+
+# Read variables/expressions via GDB. Auto-starts and stops OpenOCD.
+# Usage: make gdb-read EXPRS="parser.state dmaRxReadPos uartIdleFlag"
+#        make gdb-read EXPRS="*(uint32_t*)0x40013800"
+gdb-read:
+	@openocd -f interface/stlink.cfg -c "adapter serial $(STLINK_SN)" -f target/stm32f1x.cfg > /tmp/openocd.log 2>&1 & \
+	OCD_PID=$$!; sleep 1; \
+	$(GDB) $(ELF) -batch \
+		-ex "target extended-remote :3333" \
+		-ex "monitor halt" \
+		$(foreach e,$(EXPRS),-ex "print $(e)") \
+		-ex "monitor resume" 2>&1; \
+	kill $$OCD_PID 2>/dev/null; wait $$OCD_PID 2>/dev/null; true
+
+# Run arbitrary GDB commands from a script file. Auto-starts and stops OpenOCD.
+# Usage: make gdb-exec SCRIPT=scripts/dump.gdb
+#    or: echo -e "bt\ninfo registers" > /tmp/cmds.gdb && make gdb-exec SCRIPT=/tmp/cmds.gdb
+gdb-exec:
+	@openocd -f interface/stlink.cfg -c "adapter serial $(STLINK_SN)" -f target/stm32f1x.cfg > /tmp/openocd.log 2>&1 & \
+	OCD_PID=$$!; sleep 1; \
+	$(GDB) $(ELF) -batch \
+		-ex "target extended-remote :3333" \
+		-ex "monitor halt" \
+		-x "$(SCRIPT)" \
+		-ex "monitor resume" 2>&1; \
+	kill $$OCD_PID 2>/dev/null; wait $$OCD_PID 2>/dev/null; true
 
 # --- Debug (ST-LINK GDB server) ---
 
