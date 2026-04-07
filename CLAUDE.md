@@ -22,12 +22,18 @@ firmware/
 │   ├── main.c        # CubeMX init, main loop
 │   └── stm32f1xx_it.c # ISR: DMA, USART1 IDLE/error clearing
 ├── Core/Inc/
-│   └── cansult.h     # Constants, CAN IDs, register defs
+│   ├── cansult.h     # Constants, CAN IDs, register defs
+│   └── cansult_diag.h # Diagnostic counters (UART errors, CAN fails, DMA restarts)
 ├── test/             # Host unit tests (Unity), 21 tests
 │   ├── unity/
 │   ├── test_uart_rx_buf.c
 │   └── test_consult_parser.c
-├── Makefile          # build/test/flash/ocd-* commands
+├── scripts/
+│   ├── can_monitor.py # CAN monitor/logger, foreground (python-can, PCAN)
+│   ├── can_capture.py # Atomic CAN capture: open, record N sec, close
+│   ├── can_send.py    # Send single CAN frame
+│   └── dump.gdb       # Full GDB state snapshot
+├── Makefile          # build/test/flash/ocd-*/can-* commands
 └── cansult.ioc       # CubeMX config (DMA, NVIC, USART1, CAN)
 ```
 
@@ -40,6 +46,16 @@ make flash        # Build + flash via ST-Link SWD
 make reset        # Hardware reset
 make ocd-server   # OpenOCD GDB server on :3333
 make ocd-status   # 3s run, halt, dump parser/DMA state
+make gdb-read EXPRS="parser.state"  # Read variables (auto OpenOCD)
+make gdb-exec SCRIPT=script.gdb    # Run GDB commands (auto OpenOCD)
+make ocd-dump         # Full state snapshot via GDB
+make can-monitor      # Foreground CAN monitor (all frames, for human use)
+make can-diag         # Foreground, 0x665 diagnostics only
+make can-debug-on     # Enable UART debug stream (0x669/0x66A)
+make can-debug-off    # Disable UART debug stream
+make can-capture          # Atomic: capture all frames for N sec (CAN_DURATION=3)
+make can-capture-diag     # Atomic: capture 0x665 only
+make can-capture-debug    # Atomic: enable debug + capture UART traffic
 ```
 
 ## Testing

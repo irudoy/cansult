@@ -12,9 +12,20 @@ ELF          := $(PROJECT_DIR)/Debug/$(PROJECT).elf
 WS           := /tmp/cansult-ws
 STLINK_SN    := 210041000B000057334A534E
 
+# --- Help ---
+
+list:
+	@echo "Build:    build clean test"
+	@echo "Flash:    flash erase reset"
+	@echo "Debug:    ocd-server ocd-status ocd-dump gdb-read gdb-exec"
+	@echo "CAN:      can-monitor can-diag can-debug-on can-debug-off"
+	@echo "Capture:  can-capture can-capture-diag can-capture-debug"
+
 # --- Build ---
 
-.PHONY: build clean test flash erase reset debug gdb-server gdb-read gdb-exec
+.PHONY: build clean test flash erase reset debug gdb-server gdb-read gdb-exec \
+       ocd-dump can-monitor can-diag can-debug-on can-debug-off \
+       can-capture can-capture-diag can-capture-debug
 
 build:
 	$(CUBEIDE) --launcher.suppressErrors -nosplash \
@@ -101,6 +112,47 @@ gdb-exec:
 		-x "$(SCRIPT)" \
 		-ex "monitor resume" 2>&1; \
 	kill $$OCD_PID 2>/dev/null; wait $$OCD_PID 2>/dev/null; true
+
+# Full state dump via GDB script
+ocd-dump:
+	$(MAKE) gdb-exec SCRIPT=scripts/dump.gdb
+
+# --- CAN monitor (requires python-can + PCAN) ---
+
+PCAN_CHANNEL ?= PCAN_USBBUS1
+CAN_BITRATE  ?= 500000
+
+can-monitor:
+	python3 scripts/can_monitor.py --channel $(PCAN_CHANNEL) --bitrate $(CAN_BITRATE) --stdout
+
+can-diag:
+	python3 scripts/can_monitor.py --channel $(PCAN_CHANNEL) --bitrate $(CAN_BITRATE) --stdout --ids 0x665
+
+# Send CAN command to toggle debug UART stream
+can-debug-on:
+	python3 scripts/can_send.py --channel $(PCAN_CHANNEL) --bitrate $(CAN_BITRATE) 0x66F 01
+
+can-debug-off:
+	python3 scripts/can_send.py --channel $(PCAN_CHANNEL) --bitrate $(CAN_BITRATE) 0x66F 00
+
+# --- CAN capture (atomic: open, capture N seconds, close) ---
+
+CAN_DURATION ?= 3
+
+# Capture all cansult frames
+# Usage: make can-capture DURATION=5
+can-capture:
+	python3 scripts/can_capture.py --channel $(PCAN_CHANNEL) --bitrate $(CAN_BITRATE) --duration $(CAN_DURATION)
+
+# Capture diagnostics only (1Hz 0x665)
+# Usage: make can-capture-diag DURATION=3
+can-capture-diag:
+	python3 scripts/can_capture.py --channel $(PCAN_CHANNEL) --bitrate $(CAN_BITRATE) --duration $(CAN_DURATION) --ids 0x665
+
+# Enable debug stream + capture UART traffic
+# Usage: make can-capture-debug DURATION=5
+can-capture-debug:
+	python3 scripts/can_capture.py --channel $(PCAN_CHANNEL) --bitrate $(CAN_BITRATE) --duration $(CAN_DURATION) --ids 0x665,0x669,0x66A --pre-cmd "0x66F 01"
 
 # --- Debug (ST-LINK GDB server) ---
 

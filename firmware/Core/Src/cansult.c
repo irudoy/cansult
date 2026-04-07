@@ -1,12 +1,16 @@
 #include "cansult.h"
+#include "cansult_diag.h"
 #include "uart_rx_buf.h"
 #include "consult_parser.h"
 
 extern UART_HandleTypeDef huart1;
 extern CAN_HandleTypeDef hcan;
 
+/* --- Diagnostics --- */
+cansult_diag_t cansult_diag;
+
 /* --- DMA RX --- */
-#define DMA_RX_BUF_SIZE 64
+#define DMA_RX_BUF_SIZE 128
 static uint8_t dmaRxBuf[DMA_RX_BUF_SIZE];
 static uint32_t dmaRxReadPos = 0;
 static volatile bool uartIdleFlag = false;
@@ -17,13 +21,18 @@ static uart_rx_buf_t rxBuf;
 /* --- Protocol parser --- */
 static consult_parser_t parser;
 
+/* --- Debug stream --- */
+static volatile bool debugStream = false;
+static uint8_t dbgRxBuf[8];
+static uint8_t dbgRxLen = 0;
+
 /* --- State --- */
-static uint8_t prevState = 0xFF;
 static bool forceStopStream = false;
 static uint8_t heartbeat = 0;
 static uint32_t time;
 static uint32_t tempTime;
 static uint32_t lastFrameSentTime;
+static uint32_t lastDiagTime;
 
 /* --- DMA drain: copy new bytes from DMA circular buffer to ring buffer --- */
 static void drainDmaToRingBuf(void) {
@@ -44,13 +53,17 @@ static bool readEcuByte(uint8_t *byte) {
   return uart_rx_buf_pop(&rxBuf, byte);
 }
 
+static void dbgSendTx(const uint8_t *buf, uint16_t len);
+
 /* --- UART TX (short timeout) --- */
 static HAL_StatusTypeDef writeEcu(uint8_t b) {
+  dbgSendTx(&b, 1);
   return HAL_UART_Transmit(&huart1, &b, 1, 5);
 }
 
 /* --- Batch UART TX --- */
 static HAL_StatusTypeDef writeEcuBuf(const uint8_t *buf, uint16_t len) {
+  dbgSendTx(buf, len);
   return HAL_UART_Transmit(&huart1, (uint8_t *)buf, len, len * 2 + 5);
 }
 
@@ -140,25 +153,64 @@ static void requestStreaming(void) {
   writeEcuBuf(streamCmd, sizeof(streamCmd));
 }
 
-/* --- Debug: log state change over CAN --- */
-static void logStateChange(void) {
-  if (parser.state != prevState) {
-    CAN_TxHeaderTypeDef txHeader;
-    uint32_t txMailbox;
-    uint8_t txData[8] = {parser.state, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-    txHeader.IDE = CAN_ID_STD;
-    txHeader.RTR = CAN_RTR_DATA;
-    txHeader.StdId = 0x665;
-    txHeader.DLC = 8;
-    HAL_CAN_AddTxMessage(&hcan, &txHeader, txData, &txMailbox);
+/* --- CAN TX helper with mailbox check --- */
+static void canTx(uint16_t id, uint8_t *data, uint8_t dlc) {
+  CAN_TxHeaderTypeDef txHeader;
+  uint32_t txMailbox;
+  txHeader.IDE = CAN_ID_STD;
+  txHeader.RTR = CAN_RTR_DATA;
+  txHeader.StdId = id;
+  txHeader.DLC = dlc;
+  if (HAL_CAN_GetTxMailboxesFreeLevel(&hcan) == 0 ||
+      HAL_CAN_AddTxMessage(&hcan, &txHeader, data, &txMailbox) != HAL_OK) {
+    cansult_diag.can_tx_fail_count++;
   }
-  prevState = parser.state;
+}
+
+/* --- Debug stream: flush buffered RX bytes as CAN frame --- */
+static void dbgFlushRx(void) {
+  if (dbgRxLen > 0) {
+    canTx(CANSULT_CAN_ID_DBG_RX, dbgRxBuf, dbgRxLen);
+    dbgRxLen = 0;
+  }
+}
+
+/* --- Debug stream: send TX bytes as CAN frame --- */
+static void dbgSendTx(const uint8_t *buf, uint16_t len) {
+  if (!debugStream) return;
+  while (len > 0) {
+    uint8_t chunk = (len > 8) ? 8 : (uint8_t)len;
+    canTx(CANSULT_CAN_ID_DBG_TX, (uint8_t *)buf, chunk);
+    buf += chunk;
+    len -= chunk;
+  }
+}
+
+/* --- Diagnostic frame 0x665 at 1Hz --- */
+static void sendDiagFrame(void) {
+  if (time - lastDiagTime < 1000ul) return;
+  lastDiagTime = time;
+
+  uint8_t data[8];
+  data[0] = parser.state;
+  data[1] = cansult_diag.uart_ore_count;
+  data[2] = cansult_diag.uart_fe_count + cansult_diag.uart_ne_count;
+  data[3] = cansult_diag.can_tx_fail_count;
+  data[4] = cansult_diag.dma_restart_count;
+  data[5] = cansult_diag.watchdog_timeout_count;
+  data[6] = (uint8_t)(cansult_diag.good_frame_count & 0xFF);
+  data[7] = (uint8_t)((time - tempTime) >> 2);
+  canTx(CANSULT_CAN_ID_DIAG, data, 8);
 }
 
 /* --- Process all buffered ECU bytes through parser --- */
 static void processEcuBytes(void) {
   uint8_t byte;
   while (readEcuByte(&byte)) {
+    if (debugStream) {
+      dbgRxBuf[dbgRxLen++] = byte;
+      if (dbgRxLen == 8) dbgFlushRx();
+    }
     consult_event_t ev = consult_parser_feed(&parser, byte);
 
     /* React to parser events */
@@ -171,6 +223,7 @@ static void processEcuBytes(void) {
       break;
     case CONSULT_EVENT_STREAM_FRAME:
       tempTime = time;  /* watchdog: got data */
+      cansult_diag.good_frame_count++;
       break;
     case CONSULT_EVENT_FAULT_CODES_READY:
       resumeMainStream();
@@ -185,28 +238,20 @@ static void processEcuBytes(void) {
       break;
     }
   }
+  if (debugStream) dbgFlushRx();
 }
 
 /* --- Send CAN frames with current data --- */
 static void sendCanFrames(void) {
-  CAN_TxHeaderTypeDef txHeader;
-  uint32_t txMailbox;
   uint8_t txData[8];
 
-  txHeader.IDE = CAN_ID_STD;
-  txHeader.RTR = CAN_RTR_DATA;
-  txHeader.DLC = 8;
-
-  txHeader.StdId = CANSULT_CAN_ID_1;
   for (int i = 0; i < 8; i++) txData[i] = parser.data[i];
-  HAL_CAN_AddTxMessage(&hcan, &txHeader, txData, &txMailbox);
+  canTx(CANSULT_CAN_ID_1, txData, 8);
 
-  txHeader.StdId = CANSULT_CAN_ID_2;
   for (int i = 0; i < 7; i++) txData[i] = parser.data[8 + i];
   txData[7] = 0xFF;
-  HAL_CAN_AddTxMessage(&hcan, &txHeader, txData, &txMailbox);
+  canTx(CANSULT_CAN_ID_2, txData, 8);
 
-  txHeader.StdId = CANSULT_CAN_ID_3;
   txData[0] = parser.data[15];
   txData[1] = parser.data[16];
   txData[2] = 0xFF;
@@ -215,7 +260,7 @@ static void sendCanFrames(void) {
   txData[5] = 0xFF;
   txData[6] = parser.fault_codes[0];
   txData[7] = heartbeat;
-  HAL_CAN_AddTxMessage(&hcan, &txHeader, txData, &txMailbox);
+  canTx(CANSULT_CAN_ID_3, txData, 8);
 
   lastFrameSentTime = time;
   heartbeat++;
@@ -244,6 +289,7 @@ static void route(void) {
     break;
   case CONSULT_STATE_STREAMING:
     if (time - tempTime > 500ul) {
+      cansult_diag.watchdog_timeout_count++;
       stopStream();
       consult_parser_set_state(&parser, CONSULT_STATE_STARTUP);
     }
@@ -261,6 +307,19 @@ void cansult_uart_idle_callback(void) {
 /* --- Public API --- */
 
 void cansult_init(void) {
+  /* CAN filter: accept 0x66F on FIFO0 (16-bit list mode) */
+  CAN_FilterTypeDef filter;
+  filter.FilterBank = 0;
+  filter.FilterMode = CAN_FILTERMODE_IDLIST;
+  filter.FilterScale = CAN_FILTERSCALE_16BIT;
+  filter.FilterIdHigh = CANSULT_CAN_ID_DBG_CMD << 5;
+  filter.FilterIdLow = CANSULT_CAN_ID_DBG_CMD << 5;
+  filter.FilterMaskIdHigh = CANSULT_CAN_ID_DBG_CMD << 5;
+  filter.FilterMaskIdLow = CANSULT_CAN_ID_DBG_CMD << 5;
+  filter.FilterFIFOAssignment = CAN_RX_FIFO0;
+  filter.FilterActivation = ENABLE;
+  HAL_CAN_ConfigFilter(&hcan, &filter);
+
   HAL_CAN_Start(&hcan);
   uart_rx_buf_init(&rxBuf);
   consult_parser_init(&parser);
@@ -272,18 +331,36 @@ void cansult_init(void) {
   __HAL_UART_ENABLE_IT(&huart1, UART_IT_IDLE);
 }
 
+/* --- Poll CAN RX for debug commands --- */
+static void pollCanRx(void) {
+  CAN_RxHeaderTypeDef rxHeader;
+  uint8_t rxData[8];
+  while (HAL_CAN_GetRxFifoFillLevel(&hcan, CAN_RX_FIFO0) > 0) {
+    if (HAL_CAN_GetRxMessage(&hcan, CAN_RX_FIFO0, &rxHeader, rxData) == HAL_OK) {
+      if (rxHeader.StdId == CANSULT_CAN_ID_DBG_CMD && rxHeader.DLC >= 1) {
+        switch (rxData[0]) {
+        case 0: debugStream = false; break;
+        case 1: debugStream = true; break;
+        case 2: debugStream = !debugStream; break;
+        }
+      }
+    }
+  }
+}
+
 void cansult_tick(void) {
-  if (CANSULT_DEBUG)
-    logStateChange();
+  pollCanRx();
 
   /* Restart DMA if it stopped unexpectedly */
   if (huart1.RxState == HAL_UART_STATE_READY) {
     dmaRxReadPos = 0;
     HAL_UART_Receive_DMA(&huart1, dmaRxBuf, DMA_RX_BUF_SIZE);
     __HAL_UART_ENABLE_IT(&huart1, UART_IT_IDLE);
+    cansult_diag.dma_restart_count++;
   }
 
   time = HAL_GetTick();
-  route();
-  processEcuBytes();
+  processEcuBytes();  /* drain & update tempTime FIRST */
+  route();            /* then check watchdog */
+  sendDiagFrame();
 }

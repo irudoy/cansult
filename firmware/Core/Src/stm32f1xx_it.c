@@ -23,6 +23,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "cansult.h"
+#include "cansult_diag.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -228,12 +229,15 @@ void USART1_IRQHandler(void)
   /* Clear error flags to prevent HAL lockup (ORE is the main killer) */
   if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_ORE)) {
     __HAL_UART_CLEAR_OREFLAG(&huart1);
+    cansult_diag.uart_ore_count++;
   }
   if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_FE)) {
     __HAL_UART_CLEAR_FEFLAG(&huart1);
+    cansult_diag.uart_fe_count++;
   }
   if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_NE)) {
     __HAL_UART_CLEAR_NEFLAG(&huart1);
+    cansult_diag.uart_ne_count++;
   }
   /* USER CODE END USART1_IRQn 0 */
   HAL_UART_IRQHandler(&huart1);

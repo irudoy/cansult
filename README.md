@@ -39,9 +39,41 @@ The adapter is both powered and communicates with the ECU through the 14-pin Con
 
 Source: `docs/Generic_Nissan_ECU_Sensor_or_Data_register_table_Ver_2.pdf`
 
-### State notification (0x665)
+### Diagnostics (0x665)
 
-Sent on state change. Byte 0 = state, bytes 1-7 = 0xFF.
+Sent at 1Hz. Used to correlate ECU disconnects with UART errors, CAN failures, DMA restarts.
+
+| Byte | Content | Notes |
+|------|---------|-------|
+| 0 | `state` | 0=STARTUP, 1=INIT, 2=POST_INIT, 3=WAITING, 4=IDLE, 5=STREAMING |
+| 1 | `uart_ore_count` | UART overrun errors (prime suspect for drops) |
+| 2 | `uart_fe_count + uart_ne_count` | Framing + noise errors (line quality) |
+| 3 | `can_tx_fail_count` | CAN mailbox full / TX failures |
+| 4 | `dma_restart_count` | DMA recovery events |
+| 5 | `watchdog_timeout_count` | 500ms streaming watchdog fires |
+| 6 | `good_frame_count & 0xFF` | Low byte, should tick ~20/sec |
+| 7 | `(ms_since_last_frame) >> 2` | In 4ms units, max 1020ms |
+
+All counters are uint8 and wrap. Look at deltas between captures.
+
+### Debug UART stream (0x669, 0x66A)
+
+Raw UART bytes streamed as CAN frames. Off by default, toggled via CAN command.
+
+| ID | Direction | DLC | Content |
+|----|-----------|-----|---------|
+| 0x669 | ECU → cansult (RX) | 1-8 | Raw bytes received from ECU |
+| 0x66A | cansult → ECU (TX) | 1-8 | Raw bytes sent to ECU |
+
+### Debug command (0x66F)
+
+Send to cansult to control debug stream:
+
+| Byte 0 | Action |
+|--------|--------|
+| 0x00 | Disable debug stream |
+| 0x01 | Enable debug stream |
+| 0x02 | Toggle debug stream |
 
 ## Hardware
 

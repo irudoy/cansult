@@ -8,7 +8,7 @@ ECU (9600 8N1)
   ▼
 USART1 RX (PA10)
   │
-  ▼ DMA1 Channel 5, Circular, 64-byte buffer
+  ▼ DMA1 Channel 5, Circular, 128-byte buffer
   │
   ▼ drainDmaToRingBuf() — polls DMA NDTR counter
   │
@@ -25,6 +25,10 @@ USART1 RX (PA10)
   ▼ sendCanFrames() @ 20Hz
   │
 CAN TX → 0x666, 0x667, 0x668
+         0x665 (diagnostics @ 1Hz)
+         0x669, 0x66A (debug UART stream, when enabled)
+  │
+CAN RX ← 0x66F (debug command: enable/disable UART stream)
 ```
 
 ## State Machine
@@ -63,6 +67,10 @@ Nissan Consult protocol byte parser. Pure state machine, no HAL.
 - `push/pop/flush/available`
 - Drops on full (no blocking)
 
+### Core/Inc/cansult_diag.h
+
+Shared diagnostic counters (volatile for ISR-written fields). All uint8_t — atomic on Cortex-M3, wrapping is fine (look at deltas).
+
 ### Core/Src/cansult.c (HAL glue)
 
 - DMA circular RX → ring buffer drain (polls `__HAL_DMA_GET_COUNTER`)
@@ -70,12 +78,17 @@ Nissan Consult protocol byte parser. Pure state machine, no HAL.
 - Blocking TX with 5ms timeout (safe during DMA RX — separate HAL gState/RxState)
 - `stopStream()`: sends 0x30 ×3, waits 200ms for 0xCF ACK, flushes ring buffer
 - `requestStreaming()`: batch TX 35 bytes in single HAL call
-- DMA auto-restart: if `huart1.RxState == READY`, re-init DMA
+- DMA auto-restart: if `huart1.RxState == READY`, re-init DMA (increments `dma_restart_count`)
+- `canTx()`: helper wrapping `HAL_CAN_AddTxMessage` with mailbox check
+- `sendDiagFrame()`: 1Hz diagnostic frame on 0x665 with error counters
+- Debug UART stream: raw RX/TX bytes on 0x669/0x66A (off by default)
+- CAN RX: filter for 0x66F, polled in `cansult_tick()` to toggle debug stream
+- Race fix: `processEcuBytes()` runs before `route()` so watchdog sees freshly drained bytes
 
 ### Core/Src/stm32f1xx_it.c (ISR)
 
 - `DMA1_Channel5_IRQHandler` — HAL DMA handler (CubeMX generated)
-- `USART1_IRQHandler` — IDLE line detection (sets flag for main loop), clears ORE/FE/NE error flags
+- `USART1_IRQHandler` — IDLE line detection (sets flag for main loop), clears ORE/FE/NE error flags and increments diagnostic counters
 
 ## UART/DMA Configuration
 
@@ -87,7 +100,7 @@ Configured via CubeMX (`cansult.ioc`):
 | DMA1 Channel | 5 (USART1_RX) |
 | DMA Mode | Circular |
 | DMA Priority | High |
-| DMA Buffer | 64 bytes |
+| DMA Buffer | 128 bytes |
 | Ring Buffer | 128 bytes |
 | NVIC DMA1_Ch5 | Priority 1 |
 | NVIC USART1 | Priority 2 |
@@ -97,7 +110,7 @@ Configured via CubeMX (`cansult.ioc`):
 
 See `README.md` for frame layout and data conversion.
 
-- CAN IDs: 0x666, 0x667, 0x668 (data), 0x665 (debug state)
+- CAN IDs: 0x666-0x668 (data), 0x665 (diagnostics @ 1Hz), 0x669/0x66A (debug stream), 0x66F (debug cmd RX)
 - Bitrate: 500 kbit/s
 - TX rate: 20Hz (50ms interval)
 - 17 ECU registers streamed per cycle
