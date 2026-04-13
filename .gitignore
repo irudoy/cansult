@@ -33,3 +33,6 @@ fp-info-cache
 # *.csv
 
 *.lck
+
+# KiCad Local History (automatic backups)
+.history/

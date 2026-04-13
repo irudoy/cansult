@@ -221,24 +221,16 @@ void DMA1_Channel5_IRQHandler(void)
 void USART1_IRQHandler(void)
 {
   /* USER CODE BEGIN USART1_IRQn 0 */
-  /* Handle IDLE line detection — signals end of ECU burst */
+  /* Only IDLE line detection here. Error interrupts (FE/NE/ORE) are disabled
+     via EIE clear in cansult_init() — they must NOT trigger this ISR because
+     on STM32F1, clearing error flags requires reading DR which steals bytes
+     from DMA and causes a cascading framing error storm. Error counting is
+     done by polling SR in cansult_tick() instead. */
   if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_IDLE)) {
     __HAL_UART_CLEAR_IDLEFLAG(&huart1);
     cansult_uart_idle_callback();
   }
-  /* Clear error flags to prevent HAL lockup (ORE is the main killer) */
-  if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_ORE)) {
-    __HAL_UART_CLEAR_OREFLAG(&huart1);
-    cansult_diag.uart_ore_count++;
-  }
-  if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_FE)) {
-    __HAL_UART_CLEAR_FEFLAG(&huart1);
-    cansult_diag.uart_fe_count++;
-  }
-  if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_NE)) {
-    __HAL_UART_CLEAR_NEFLAG(&huart1);
-    cansult_diag.uart_ne_count++;
-  }
+  return;
   /* USER CODE END USART1_IRQn 0 */
   HAL_UART_IRQHandler(&huart1);
   /* USER CODE BEGIN USART1_IRQn 1 */

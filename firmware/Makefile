@@ -147,7 +147,7 @@ can-capture:
 # Capture diagnostics only (1Hz 0x665)
 # Usage: make can-capture-diag DURATION=3
 can-capture-diag:
-	python3 scripts/can_capture.py --channel $(PCAN_CHANNEL) --bitrate $(CAN_BITRATE) --duration $(CAN_DURATION) --ids 0x665
+	python3 scripts/can_capture.py --channel $(PCAN_CHANNEL) --bitrate $(CAN_BITRATE) --duration $(CAN_DURATION) --ids 0x665,0x66B
 
 # Enable debug stream + capture UART traffic
 # Usage: make can-capture-debug DURATION=5

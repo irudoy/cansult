@@ -5,6 +5,7 @@
 
 extern UART_HandleTypeDef huart1;
 extern CAN_HandleTypeDef hcan;
+extern ADC_HandleTypeDef hadc1;
 
 /* --- Diagnostics --- */
 cansult_diag_t cansult_diag;
@@ -186,21 +187,67 @@ static void dbgSendTx(const uint8_t *buf, uint16_t len) {
   }
 }
 
-/* --- Diagnostic frame 0x665 at 1Hz --- */
+/* --- Read MCU internal temperature sensor, returns °C * 10 --- */
+static int16_t readMcuTempC10(void) {
+  HAL_ADC_Start(&hadc1);
+  if (HAL_ADC_PollForConversion(&hadc1, 5) != HAL_OK) {
+    HAL_ADC_Stop(&hadc1);
+    return INT16_MIN;
+  }
+  uint32_t raw = HAL_ADC_GetValue(&hadc1);
+  HAL_ADC_Stop(&hadc1);
+  /* Vref = 3.3 V, 12-bit ADC. Datasheet: V25 = 1.43 V, Avg_Slope = 4.3 mV/°C
+     T(°C) = (V25 - Vsense)/Slope + 25
+     mV = raw * 3300 / 4095
+     T*10 = (14300 - mV*10)/43 + 250 */
+  int32_t mv_x10 = (int32_t)raw * 33000 / 4095;
+  int32_t t_c10 = (14300 - mv_x10) / 43 + 250;
+  return (int16_t)t_c10;
+}
+
+/* --- Diagnostic frames 0x665 + 0x66B at 1Hz --- */
+static uint16_t lastOreSnap, lastFeNeSnap, lastCanSnap;
+
+static uint8_t deltaSat(uint16_t prev, uint16_t curr) {
+  uint16_t d = curr - prev;
+  return d > 255u ? 255u : (uint8_t)d;
+}
+
 static void sendDiagFrame(void) {
   if (time - lastDiagTime < 1000ul) return;
   lastDiagTime = time;
 
+  /* 0x665: bytes 1-3 are per-second rates (saturating at 255),
+     bytes 4-6 are monotonic u8 counters, byte 7 is ms since last frame /4. */
+  uint16_t feNe = cansult_diag.uart_fe_count + cansult_diag.uart_ne_count;
   uint8_t data[8];
   data[0] = parser.state;
-  data[1] = cansult_diag.uart_ore_count;
-  data[2] = cansult_diag.uart_fe_count + cansult_diag.uart_ne_count;
-  data[3] = cansult_diag.can_tx_fail_count;
+  data[1] = deltaSat(lastOreSnap, cansult_diag.uart_ore_count);
+  data[2] = deltaSat(lastFeNeSnap, feNe);
+  data[3] = deltaSat(lastCanSnap, cansult_diag.can_tx_fail_count);
   data[4] = cansult_diag.dma_restart_count;
   data[5] = cansult_diag.watchdog_timeout_count;
-  data[6] = (uint8_t)(cansult_diag.good_frame_count & 0xFF);
+  data[6] = cansult_diag.reconnect_count;
   data[7] = (uint8_t)((time - tempTime) >> 2);
   canTx(CANSULT_CAN_ID_DIAG, data, 8);
+  lastOreSnap = cansult_diag.uart_ore_count;
+  lastFeNeSnap = feNe;
+  lastCanSnap = cansult_diag.can_tx_fail_count;
+
+  /* Update current MCU temperature (signed, °C*10) */
+  cansult_diag.mcu_temp_c10 = readMcuTempC10();
+
+  /* 0x66B: extended diag — full 16-bit FE/NE + MCU temp (current, at-first-FE) */
+  uint8_t d2[8];
+  d2[0] = (uint8_t)(cansult_diag.uart_fe_count >> 8);    /* FE high */
+  d2[1] = (uint8_t)(cansult_diag.uart_fe_count);         /* FE low  */
+  d2[2] = (uint8_t)(cansult_diag.uart_ne_count >> 8);    /* NE high */
+  d2[3] = (uint8_t)(cansult_diag.uart_ne_count);         /* NE low  */
+  d2[4] = (uint8_t)((uint16_t)cansult_diag.mcu_temp_c10 >> 8);
+  d2[5] = (uint8_t)((uint16_t)cansult_diag.mcu_temp_c10);
+  d2[6] = (uint8_t)((uint16_t)cansult_diag.first_fe_temp_c10 >> 8);
+  d2[7] = (uint8_t)((uint16_t)cansult_diag.first_fe_temp_c10);
+  canTx(CANSULT_CAN_ID_DIAG2, d2, 8);
 }
 
 /* --- Process all buffered ECU bytes through parser --- */
@@ -268,6 +315,14 @@ static void sendCanFrames(void) {
 
 /* --- State machine router --- */
 static void route(void) {
+  static uint8_t prevRouteState = CONSULT_STATE_STARTUP;
+  /* Count transitions *into* STARTUP (skip the initial boot-time entry) */
+  if (parser.state != prevRouteState) {
+    if (parser.state == CONSULT_STATE_STARTUP && time > 1000) {
+      cansult_diag.reconnect_count++;
+    }
+    prevRouteState = parser.state;
+  }
   switch (parser.state) {
   case CONSULT_STATE_STARTUP:
     initECU();
@@ -280,8 +335,12 @@ static void route(void) {
     postInit();
     break;
   case CONSULT_STATE_WAITING_ECU_RESPONSE:
-    if (time - tempTime > 2000ul)
-      consult_parser_set_state(&parser, CONSULT_STATE_STARTUP);
+    if (time - tempTime > 2000ul) {
+      /* If fault codes request timed out, proceed to streaming anyway */
+      forceStopStream = false;
+      consult_parser_reset_frame(&parser);
+      consult_parser_set_state(&parser, CONSULT_STATE_IDLE);
+    }
     break;
   case CONSULT_STATE_IDLE:
     if (!forceStopStream)
@@ -323,9 +382,16 @@ void cansult_init(void) {
   HAL_CAN_Start(&hcan);
   uart_rx_buf_init(&rxBuf);
   consult_parser_init(&parser);
+  cansult_diag.first_fe_temp_c10 = INT16_MIN;
 
   /* Start DMA circular reception */
   HAL_UART_Receive_DMA(&huart1, dmaRxBuf, DMA_RX_BUF_SIZE);
+
+  /* Disable Error Interrupt Enable (EIE) — HAL_UART_Receive_DMA enables it,
+     but on STM32F1 the only way to clear FE/NE/ORE flags is reading DR, which
+     steals bytes from DMA and causes cascading framing errors. We poll SR for
+     error counters in cansult_tick() instead. */
+  CLEAR_BIT(huart1.Instance->CR3, USART_CR3_EIE);
 
   /* Enable IDLE line interrupt (not enabled by HAL_UART_Receive_DMA) */
   __HAL_UART_ENABLE_IT(&huart1, UART_IT_IDLE);
@@ -355,8 +421,30 @@ void cansult_tick(void) {
   if (huart1.RxState == HAL_UART_STATE_READY) {
     dmaRxReadPos = 0;
     HAL_UART_Receive_DMA(&huart1, dmaRxBuf, DMA_RX_BUF_SIZE);
+    CLEAR_BIT(huart1.Instance->CR3, USART_CR3_EIE);
     __HAL_UART_ENABLE_IT(&huart1, UART_IT_IDLE);
     cansult_diag.dma_restart_count++;
+  }
+
+  /* Poll UART error flags and clear them (SR+DR sequence).
+     Main loop runs at ~1 kHz; race with DMA (reading DR when RXNE set) is rare.
+     Worst case: occasional byte loss during error periods (already unreliable). */
+  {
+    uint32_t sr = huart1.Instance->SR;
+    uint32_t err = sr & (USART_SR_ORE | USART_SR_FE | USART_SR_NE);
+    if (err) {
+      (void)huart1.Instance->DR;  /* SR already read above; DR read clears flags */
+      if (err & USART_SR_ORE) cansult_diag.uart_ore_count++;
+      if (err & USART_SR_FE) {
+        if (cansult_diag.uart_fe_count == 0) {
+          /* Read temp live; the 1Hz-cached value can be 0 (BSS) before
+             first sendDiagFrame or up to a second stale later. */
+          cansult_diag.first_fe_temp_c10 = readMcuTempC10();
+        }
+        cansult_diag.uart_fe_count++;
+      }
+      if (err & USART_SR_NE) cansult_diag.uart_ne_count++;
+    }
   }
 
   time = HAL_GetTick();

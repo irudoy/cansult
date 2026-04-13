@@ -10,24 +10,19 @@ import can
 
 STATES = ['STARTUP', 'INIT', 'POST_INIT', 'WAITING', 'IDLE', 'STREAMING']
 
-CANSULT_IDS = {0x665, 0x666, 0x667, 0x668, 0x669, 0x66A, 0x66F}
+CANSULT_IDS = {0x665, 0x666, 0x667, 0x668, 0x669, 0x66A, 0x66B, 0x66F}
 
 
-def decode_0x665(d, prev):
-    """Decode diagnostic frame, show deltas from previous."""
+def decode_0x665(d, _prev):
+    """Decode diagnostic frame — bytes 1-3 are saturating per-second rates."""
     state = STATES[d[0]] if d[0] < len(STATES) else str(d[0])
-    delta = ''
-    if prev:
-        diffs = []
-        labels = ['ORE', 'FE+NE', 'CAN', 'DMA', 'WDT']
-        for i, label in enumerate(labels, 1):
-            diff = (d[i] - prev[i]) & 0xFF
-            if diff:
-                diffs.append(f'+{diff} {label}')
-        if diffs:
-            delta = '  ' + ', '.join(diffs)
-    return (f'DIAG  {state:10s} ORE={d[1]} FE+NE={d[2]} CAN={d[3]} '
-            f'DMA={d[4]} WDT={d[5]} frames={d[6]} ms={d[7]*4}{delta}')
+    rates = []
+    for val, label in zip(d[1:4], ('ORE', 'FE+NE', 'CAN')):
+        if val:
+            rates.append(f'{val}{"+" if val == 255 else ""} {label}/s')
+    rate_str = ('  ' + ', '.join(rates)) if rates else ''
+    return (f'DIAG  {state:10s} DMA={d[4]} WDT={d[5]} rc={d[6]} '
+            f'ms={d[7]*4}{rate_str}')
 
 
 def decode_0x666(d):
@@ -52,6 +47,18 @@ def decode_0x668(d):
             f'Vdev={d[2]*0.08:.1f}V DTC=0x{d[6]:02X} hb={d[7]}')
 
 
+def decode_0x66b(d):
+    """Decode extended diagnostic frame: full counters, MCU temperature."""
+    fe = (d[0] << 8) | d[1]
+    ne = (d[2] << 8) | d[3]
+    temp_raw = (d[4] << 8) | d[5]
+    fe_temp_raw = (d[6] << 8) | d[7]
+    temp = temp_raw - 0x10000 if temp_raw & 0x8000 else temp_raw
+    fe_temp = fe_temp_raw - 0x10000 if fe_temp_raw & 0x8000 else fe_temp_raw
+    fe_info = f'@{fe_temp/10:.1f}C' if fe_temp != -32768 else 'no_FE'
+    return f'DIAG2 FE={fe} NE={ne} T={temp/10:.1f}C 1st_FE{fe_info}'
+
+
 def decode_debug(can_id, d, dlc):
     """Decode debug stream frames (raw UART hex)."""
     direction = 'RX' if can_id == 0x669 else 'TX'
@@ -66,13 +73,15 @@ def format_msg(msg, prev_diag):
 
     if aid == 0x665:
         text = decode_0x665(d, prev_diag)
-        return text, list(d)
+        return text, prev_diag
     elif aid == 0x666:
         return decode_0x666(d), prev_diag
     elif aid == 0x667:
         return decode_0x667(d), prev_diag
     elif aid == 0x668:
         return decode_0x668(d), prev_diag
+    elif aid == 0x66B:
+        return decode_0x66b(d), prev_diag
     elif aid in (0x669, 0x66A):
         return decode_debug(aid, d, msg.dlc), prev_diag
     else:
