@@ -89,12 +89,15 @@ def main():
     parser.add_argument('--bitrate', type=int, default=500000)
     parser.add_argument('--duration', type=float, default=3.0, help='Capture duration in seconds')
     parser.add_argument('--ids', help='Filter CAN IDs, e.g. 0x665,0x669,0x66A')
+    parser.add_argument('--cansult', action='store_true', help=f'Filter to cansult IDs: {", ".join(f"0x{i:03X}" for i in sorted(CANSULT_IDS))}')
     parser.add_argument('--pre-cmd', help='Send CAN frame before capture, e.g. "0x66F 01"')
     args = parser.parse_args()
 
     id_filter = None
     if args.ids:
         id_filter = set(int(x, 0) for x in args.ids.split(','))
+    elif args.cansult:
+        id_filter = CANSULT_IDS
 
     # Clean up any previous PCAN state
     pcan = PCANBasic()
@@ -120,9 +123,7 @@ def main():
             msg = bus.recv(timeout=min(remaining, 0.5))
             if msg is None:
                 continue
-            if msg.arbitration_id not in CANSULT_IDS:
-                continue
-            if id_filter and msg.arbitration_id not in id_filter:
+            if id_filter is not None and msg.arbitration_id not in id_filter:
                 continue
 
             text, prev_diag = format_msg(msg, prev_diag)
