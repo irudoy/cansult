@@ -237,7 +237,8 @@ static void sendDiagFrame(void) {
   /* Update current MCU temperature (signed, °C*10) */
   cansult_diag.mcu_temp_c10 = readMcuTempC10();
 
-  /* 0x66B: extended diag — full 16-bit FE/NE + MCU temp (current, at-first-FE) */
+  /* 0x66B: extended diag — full 16-bit FE/NE, current MCU temp,
+     CAN recover count, current HAL CAN state. */
   uint8_t d2[8];
   d2[0] = (uint8_t)(cansult_diag.uart_fe_count >> 8);    /* FE high */
   d2[1] = (uint8_t)(cansult_diag.uart_fe_count);         /* FE low  */
@@ -245,8 +246,8 @@ static void sendDiagFrame(void) {
   d2[3] = (uint8_t)(cansult_diag.uart_ne_count);         /* NE low  */
   d2[4] = (uint8_t)((uint16_t)cansult_diag.mcu_temp_c10 >> 8);
   d2[5] = (uint8_t)((uint16_t)cansult_diag.mcu_temp_c10);
-  d2[6] = (uint8_t)((uint16_t)cansult_diag.first_fe_temp_c10 >> 8);
-  d2[7] = (uint8_t)((uint16_t)cansult_diag.first_fe_temp_c10);
+  d2[6] = cansult_diag.can_recover_count;
+  d2[7] = (uint8_t)hcan.State;
   canTx(CANSULT_CAN_ID_DIAG2, d2, 8);
 }
 
@@ -365,8 +366,8 @@ void cansult_uart_idle_callback(void) {
 
 /* --- Public API --- */
 
-void cansult_init(void) {
-  /* CAN filter: accept 0x66F on FIFO0 (16-bit list mode) */
+/* --- CAN filter: accept 0x66F on FIFO0 (16-bit list mode) --- */
+static void configCanFilter(void) {
   CAN_FilterTypeDef filter;
   filter.FilterBank = 0;
   filter.FilterMode = CAN_FILTERMODE_IDLIST;
@@ -378,7 +379,23 @@ void cansult_init(void) {
   filter.FilterFIFOAssignment = CAN_RX_FIFO0;
   filter.FilterActivation = ENABLE;
   HAL_CAN_ConfigFilter(&hcan, &filter);
+}
 
+/* --- Recover CAN peripheral from bus-off / RESET / ERROR state.
+   Observed 2026-04-15: brownout cleared CAN registers while MCU core
+   survived; firmware kept running but TX silently stopped. */
+static void recoverCan(void) {
+  (void)HAL_CAN_Stop(&hcan);
+  (void)HAL_CAN_DeInit(&hcan);
+  (void)HAL_CAN_Init(&hcan);
+  configCanFilter();
+  (void)HAL_CAN_Start(&hcan);
+  if (cansult_diag.can_recover_count < 255)
+    cansult_diag.can_recover_count++;
+}
+
+void cansult_init(void) {
+  configCanFilter();
   HAL_CAN_Start(&hcan);
   uart_rx_buf_init(&rxBuf);
   consult_parser_init(&parser);
@@ -415,6 +432,19 @@ static void pollCanRx(void) {
 }
 
 void cansult_tick(void) {
+  /* Healthy state after HAL_CAN_Start is LISTENING. Anything else (RESET
+     after brownout, READY after aborted Start, ERROR) means we can't TX.
+     Backoff: Stop/DeInit/Init/Start can each spend ~10 ms in INAK timeout
+     on a wedged peripheral — without a gate, the main loop collapses from
+     ~1 kHz to ~30 Hz and starves UART/parser/watchdog. */
+  static uint32_t lastCanRecoverAttempt = 0;
+  uint32_t now = HAL_GetTick();
+  if (hcan.State != HAL_CAN_STATE_LISTENING &&
+      now - lastCanRecoverAttempt > 500ul) {
+    lastCanRecoverAttempt = now;
+    recoverCan();
+  }
+
   pollCanRx();
 
   /* Restart DMA if it stopped unexpectedly */

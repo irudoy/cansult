@@ -45,15 +45,21 @@ def decode_0x668(d):
             f'Vdev={d[2]*0.08:.1f}V DTC=0x{d[6]:02X} hb={d[7]}')
 
 
+CAN_STATE_NAMES = {
+    0: 'RESET', 1: 'READY', 2: 'LISTENING',
+    3: 'SLEEP_P', 4: 'SLEEP_A', 5: 'ERROR',
+}
+
+
 def decode_0x66b(d):
     fe = (d[0] << 8) | d[1]
     ne = (d[2] << 8) | d[3]
     temp_raw = (d[4] << 8) | d[5]
-    fe_temp_raw = (d[6] << 8) | d[7]
     temp = temp_raw - 0x10000 if temp_raw & 0x8000 else temp_raw
-    fe_temp = fe_temp_raw - 0x10000 if fe_temp_raw & 0x8000 else fe_temp_raw
-    fe_info = f'@{fe_temp/10:.1f}C' if fe_temp != -32768 else 'no_FE'
-    return f'DIAG2 FE={fe} NE={ne} T={temp/10:.1f}C 1st_FE{fe_info}'
+    can_recov = d[6]
+    can_state = CAN_STATE_NAMES.get(d[7], f'?{d[7]}')
+    return (f'DIAG2 FE={fe} NE={ne} T={temp/10:.1f}C '
+            f'can_recov={can_recov} can_state={can_state}')
 
 
 def decode_debug(can_id, d, dlc):

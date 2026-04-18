@@ -11,6 +11,7 @@ typedef struct {
 
   /* System counters */
   uint16_t can_tx_fail_count;
+  uint8_t can_recover_count;
   uint8_t dma_restart_count;
   uint8_t watchdog_timeout_count;
   uint16_t good_frame_count;
