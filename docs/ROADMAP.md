@@ -19,4 +19,4 @@
 
 ## Firmware
 
-- **CAN auto-recovery.** Peripheral has no recovery from bus-off / `HAL_CAN_STATE_RESET` (observed 2026-04-15 after a heat-gun-induced brownout — SRAM/UART state survived, but CAN state registers cleared and firmware did not re-init). Needs `HAL_CAN_ErrorCallback` + periodic state check in `cansult_tick`, plus reconciling `cansult.ioc` `AutoBusOff=ENABLE` vs generated `main.c` `AutoBusOff=DISABLE`. Not bundled with the thermal fix — separate focused change.
+(no open items)
