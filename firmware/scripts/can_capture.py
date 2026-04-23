@@ -17,13 +17,10 @@ CANSULT_IDS = {0x665, 0x666, 0x667, 0x668, 0x669, 0x66A, 0x66B, 0x66F}
 
 def decode_0x665(d, _prev):
     state = STATES[d[0]] if d[0] < len(STATES) else str(d[0])
-    rates = []
-    for val, label in zip(d[1:4], ('ORE', 'IMPL', 'CAN')):
-        if val:
-            rates.append(f'{val}{"+" if val == 255 else ""} {label}/s')
-    rate_str = ('  ' + ', '.join(rates)) if rates else ''
-    return (f'DIAG  {state:10s} DMA={d[4]} WDT={d[5]} rc={d[6]} '
-            f'ms={d[7]*4}{rate_str}')
+    def r(val):
+        return f'{val}{"+" if val == 255 else ""}'
+    return (f'DIAG  {state:10s} ORE={r(d[1])}/s IMPL={r(d[2])}/s '
+            f'CAN={r(d[3])}/s DMA={d[4]} WDT={d[5]} rc={d[6]} ms={d[7]*4}')
 
 
 def decode_0x666(d):

@@ -17,13 +17,10 @@ def decode_0x665(d, _prev):
     """Decode diagnostic frame — bytes 1-3 are saturating per-second rates.
     FE+NE rate isn't in this frame; derive it from 0x66B FE/NE u16 deltas."""
     state = STATES[d[0]] if d[0] < len(STATES) else str(d[0])
-    rates = []
-    for val, label in zip(d[1:4], ('ORE', 'IMPL', 'CAN')):
-        if val:
-            rates.append(f'{val}{"+" if val == 255 else ""} {label}/s')
-    rate_str = ('  ' + ', '.join(rates)) if rates else ''
-    return (f'DIAG  {state:10s} DMA={d[4]} WDT={d[5]} rc={d[6]} '
-            f'ms={d[7]*4}{rate_str}')
+    def r(val):
+        return f'{val}{"+" if val == 255 else ""}'
+    return (f'DIAG  {state:10s} ORE={r(d[1])}/s IMPL={r(d[2])}/s '
+            f'CAN={r(d[3])}/s DMA={d[4]} WDT={d[5]} rc={d[6]} ms={d[7]*4}')
 
 
 def decode_0x666(d):
