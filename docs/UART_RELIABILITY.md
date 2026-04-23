@@ -255,10 +255,10 @@ State transitions during reconnect: `05→00→01→00→01→03→00→03→04�
 
 ### TODO (status 2026-04-24)
 
-- [x] Level 3 — AutoBusOff + software `recoverCan()` for RESET/ERROR states landed in commit 0f87011. TX-error handling via `canTx` mailbox check is in place. IWDG deferred (not needed once thermal root cause was addressed).
+- [x] Level 3 — AutoBusOff + software `recoverCan()` for RESET/ERROR states landed in commit 3d3b0dc. TX-error handling via `canTx` mailbox check is in place. IWDG deferred (not needed once thermal root cause was addressed).
 - [x] Level 4 — 0x665 carries parser state + per-second rates (ORE, implausible, CAN fail) + monotonic u8 counters + freshness. Extended 0x66B adds full-width FE/NE u16, MCU temp, CAN recover count, mode/state.
 - [x] UART error counters (ORE/FE/NE) exposed on both 0x665 (rate) and 0x66B (u16).
 - [x] DMA buffer is 128 bytes (circular, DMA1 Ch5). See `docs/ARCHITECTURE.md`.
 - [x] CAN TX mailbox check implemented in `canTx()`; failures increment `can_tx_fail_count` instead of blocking the drain.
-- [x] Root cause of periodic drops identified as thermal (LDO/LMV358 on CLK path above ≈28.5 °C). MCU now generates the 153.52 kHz consult CLK via TIM2_CH2 PWM (commit 548cc15); external divider slated for removal on next PCB.
-- [x] Plausibility guard rejects decoded frames with impossible values (RPM>10000 etc.) and rolls `data[]` back to last-good snapshot (`consult_parser_validate_stream`, commit 2d9f05f).
+- [x] Root cause of periodic drops identified as thermal (LDO/LMV358 on CLK path above ≈28.5 °C). MCU now generates the 153.52 kHz consult CLK via TIM2_CH2 PWM (commit d60aaac); external divider slated for removal on next PCB.
+- [x] Plausibility guard rejects decoded frames with impossible values (RPM>10000 etc.) and rolls `data[]` back to last-good snapshot (`consult_parser_validate_stream`, commit 5e7787b).
