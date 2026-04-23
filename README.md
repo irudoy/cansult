@@ -102,6 +102,39 @@ Send to cansult to control debug stream:
 | 0x01 | Enable debug stream |
 | 0x02 | Toggle debug stream |
 
+## Build & Flash
+
+All commands run from `firmware/`. Toolchain paths (STM32CubeIDE, ST-Link GDB server) are pinned in the `Makefile`.
+
+```bash
+make build        # Headless CubeIDE build
+make test         # Host unit tests (Unity, 28 tests)
+make flash        # Build + flash via ST-Link SWD
+make reset        # Hardware reset via ST-Link
+```
+
+### Debug
+
+```bash
+make ocd-server   # OpenOCD GDB server on :3333
+make ocd-status   # Reset, run 3s, halt, dump parser/DMA state
+make ocd-dump     # Full state snapshot via GDB script
+make gdb-read EXPRS="parser.state dmaRxReadPos"
+make gdb-exec  SCRIPT=scripts/dump.gdb
+```
+
+### CAN tools (requires python-can + PCAN)
+
+```bash
+make can-monitor          # Live monitor, all cansult frames
+make can-diag             # 0x665 + 0x66B diagnostics only
+make can-capture          # Atomic N-second capture (CAN_DURATION=3)
+make can-capture-diag     # Atomic capture: diagnostics only
+make can-capture-debug    # Enable 0x669/0x66A debug stream + capture
+make can-debug-on/off     # Toggle raw UART debug stream (0x66F)
+make can-adapter-on/off   # Toggle BT pass-through ADAPTER mode (0x66D)
+```
+
 ## Hardware
 
 * STM32F103TBU6 — generates the 153.52 kHz Consult CLK on PB3 via TIM2_CH2 PWM
