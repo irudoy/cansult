@@ -15,6 +15,12 @@
 #define CANSULT_CAN_ID_DBG_RX 0x669
 #define CANSULT_CAN_ID_DBG_TX 0x66A
 #define CANSULT_CAN_ID_DBG_CMD 0x66F
+#define CANSULT_CAN_ID_MODE_CMD 0x66D
+
+typedef enum {
+  CANSULT_MODE_STREAM = 0,   /* normal: MCU drives Consult, decodes, CAN TX at 20 Hz */
+  CANSULT_MODE_ADAPTER = 1,  /* BT pass-through: PA9 high-Z, BT_EN high, PC ↔ BT ↔ ECU */
+} cansult_mode_t;
 
 #define CANSULT_RATE_10HZ 100ul
 #define CANSULT_RATE_20HZ 50ul

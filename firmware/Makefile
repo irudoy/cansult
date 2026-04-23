@@ -18,13 +18,14 @@ list:
 	@echo "Build:    build clean test"
 	@echo "Flash:    flash erase reset"
 	@echo "Debug:    ocd-server ocd-status ocd-dump gdb-read gdb-exec"
-	@echo "CAN:      can-monitor can-diag can-debug-on can-debug-off"
+	@echo "CAN:      can-monitor can-diag can-debug-on can-debug-off can-adapter-on can-adapter-off"
 	@echo "Capture:  can-capture can-capture-diag can-capture-debug"
 
 # --- Build ---
 
 .PHONY: build clean test flash erase reset debug gdb-server gdb-read gdb-exec \
        ocd-dump can-monitor can-diag can-debug-on can-debug-off \
+       can-adapter-on can-adapter-off \
        can-capture can-capture-diag can-capture-debug
 
 build:
@@ -134,6 +135,14 @@ can-debug-on:
 
 can-debug-off:
 	python3 scripts/can_send.py --channel $(PCAN_CHANNEL) --bitrate $(CAN_BITRATE) 0x66F 00
+
+# Enter BT pass-through adapter mode (PC-side Nistune/NDSIII talks to ECU via BT)
+can-adapter-on:
+	python3 scripts/can_send.py --channel $(PCAN_CHANNEL) --bitrate $(CAN_BITRATE) 0x66D 01
+
+# Exit adapter mode back to 20Hz CAN stream
+can-adapter-off:
+	python3 scripts/can_send.py --channel $(PCAN_CHANNEL) --bitrate $(CAN_BITRATE) 0x66D 00
 
 # --- CAN capture (atomic: open, capture N seconds, close) ---
 

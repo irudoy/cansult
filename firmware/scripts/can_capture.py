@@ -57,9 +57,10 @@ def decode_0x66b(d):
     temp_raw = (d[4] << 8) | d[5]
     temp = temp_raw - 0x10000 if temp_raw & 0x8000 else temp_raw
     can_recov = d[6]
-    can_state = CAN_STATE_NAMES.get(d[7], f'?{d[7]}')
+    run_mode = 'ADAPTER' if d[7] & 0x80 else 'STREAM'
+    can_state = CAN_STATE_NAMES.get(d[7] & 0x7F, f'?{d[7] & 0x7F}')
     return (f'DIAG2 FE={fe} NE={ne} T={temp/10:.1f}C '
-            f'can_recov={can_recov} can_state={can_state}')
+            f'can_recov={can_recov} can_state={can_state} mode={run_mode}')
 
 
 def decode_debug(can_id, d, dlc):

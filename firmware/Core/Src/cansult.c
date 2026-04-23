@@ -34,6 +34,7 @@ static uint32_t time;
 static uint32_t tempTime;
 static uint32_t lastFrameSentTime;
 static uint32_t lastDiagTime;
+static cansult_mode_t mode = CANSULT_MODE_STREAM;
 
 /* --- DMA drain: copy new bytes from DMA circular buffer to ring buffer --- */
 static void drainDmaToRingBuf(void) {
@@ -247,7 +248,9 @@ static void sendDiagFrame(void) {
   d2[4] = (uint8_t)((uint16_t)cansult_diag.mcu_temp_c10 >> 8);
   d2[5] = (uint8_t)((uint16_t)cansult_diag.mcu_temp_c10);
   d2[6] = cansult_diag.can_recover_count;
-  d2[7] = (uint8_t)hcan.State;
+  /* byte 7: bit 7 = mode (1 = ADAPTER), bits 0-6 = hcan.State (≤5). */
+  d2[7] = (uint8_t)((mode == CANSULT_MODE_ADAPTER ? 0x80u : 0u) |
+                    ((uint8_t)hcan.State & 0x7Fu));
   canTx(CANSULT_CAN_ID_DIAG2, d2, 8);
 }
 
@@ -366,7 +369,8 @@ void cansult_uart_idle_callback(void) {
 
 /* --- Public API --- */
 
-/* --- CAN filter: accept 0x66F on FIFO0 (16-bit list mode) --- */
+/* --- CAN filter: accept 0x66F (debug cmd) + 0x66D (mode cmd) on FIFO0
+   in 16-bit ID list mode (4 ID slots total, duplicate each for clarity). */
 static void configCanFilter(void) {
   CAN_FilterTypeDef filter;
   filter.FilterBank = 0;
@@ -374,11 +378,53 @@ static void configCanFilter(void) {
   filter.FilterScale = CAN_FILTERSCALE_16BIT;
   filter.FilterIdHigh = CANSULT_CAN_ID_DBG_CMD << 5;
   filter.FilterIdLow = CANSULT_CAN_ID_DBG_CMD << 5;
-  filter.FilterMaskIdHigh = CANSULT_CAN_ID_DBG_CMD << 5;
-  filter.FilterMaskIdLow = CANSULT_CAN_ID_DBG_CMD << 5;
+  filter.FilterMaskIdHigh = CANSULT_CAN_ID_MODE_CMD << 5;
+  filter.FilterMaskIdLow = CANSULT_CAN_ID_MODE_CMD << 5;
   filter.FilterFIFOAssignment = CAN_RX_FIFO0;
   filter.FilterActivation = ENABLE;
   HAL_CAN_ConfigFilter(&hcan, &filter);
+}
+
+/* --- Reconfigure PA9 (USART1_TX) between AF push-pull and GPIO input.
+   In adapter mode we release PA9 to high-Z so the BT module owns MCU_TX;
+   PA10 (RX) stays an input either way, so no reconfig needed there. */
+static void setUart1TxPin(uint32_t gpioMode, uint32_t speed) {
+  GPIO_InitTypeDef g = {0};
+  g.Pin = GPIO_PIN_9;
+  g.Mode = gpioMode;
+  g.Pull = GPIO_NOPULL;
+  g.Speed = speed;
+  HAL_GPIO_Init(GPIOA, &g);
+}
+
+static void enterAdapterMode(void) {
+  if (mode == CANSULT_MODE_ADAPTER) return;
+  /* Tell ECU to halt the MCU-initiated stream before we yield the line —
+     otherwise it keeps blasting telemetry and confuses PC-side Consult
+     software talking through BT. */
+  stopStream();
+  /* Release MCU_TX to high-Z; BT module will drive it from now on. */
+  setUart1TxPin(GPIO_MODE_INPUT, GPIO_SPEED_FREQ_LOW);
+  /* Power up BT module (BC417 expansion board). */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_SET);
+  /* Reset parser/buffers so on exit we re-handshake with ECU cleanly. */
+  consult_parser_init(&parser);
+  uart_rx_buf_flush(&rxBuf);
+  mode = CANSULT_MODE_ADAPTER;
+}
+
+static void exitAdapterMode(void) {
+  if (mode == CANSULT_MODE_STREAM) return;
+  /* Power down BT module first so it stops driving the shared line. */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET);
+  /* Reclaim MCU_TX. */
+  setUart1TxPin(GPIO_MODE_AF_PP, GPIO_SPEED_FREQ_HIGH);
+  /* Skip whatever the bus put into the DMA ring during pass-through. */
+  dmaRxReadPos = DMA_RX_BUF_SIZE - __HAL_DMA_GET_COUNTER(huart1.hdmarx);
+  uart_rx_buf_flush(&rxBuf);
+  consult_parser_init(&parser);
+  tempTime = HAL_GetTick();  /* arm watchdog */
+  mode = CANSULT_MODE_STREAM;
 }
 
 /* --- Recover CAN peripheral from bus-off / RESET / ERROR state.
@@ -395,6 +441,18 @@ static void recoverCan(void) {
 }
 
 void cansult_init(void) {
+  /* BT_EN (PA8) output, initially low — BT module powered off in STREAM mode.
+     Not configured via CubeMX; set up here so regeneration doesn't fight us. */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET);
+  {
+    GPIO_InitTypeDef bt = {0};
+    bt.Pin = GPIO_PIN_8;
+    bt.Mode = GPIO_MODE_OUTPUT_PP;
+    bt.Pull = GPIO_NOPULL;
+    bt.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOA, &bt);
+  }
+
   configCanFilter();
   HAL_CAN_Start(&hcan);
   uart_rx_buf_init(&rxBuf);
@@ -414,18 +472,28 @@ void cansult_init(void) {
   __HAL_UART_ENABLE_IT(&huart1, UART_IT_IDLE);
 }
 
-/* --- Poll CAN RX for debug commands --- */
+/* --- Poll CAN RX for debug & mode commands --- */
 static void pollCanRx(void) {
   CAN_RxHeaderTypeDef rxHeader;
   uint8_t rxData[8];
   while (HAL_CAN_GetRxFifoFillLevel(&hcan, CAN_RX_FIFO0) > 0) {
-    if (HAL_CAN_GetRxMessage(&hcan, CAN_RX_FIFO0, &rxHeader, rxData) == HAL_OK) {
-      if (rxHeader.StdId == CANSULT_CAN_ID_DBG_CMD && rxHeader.DLC >= 1) {
-        switch (rxData[0]) {
-        case 0: debugStream = false; break;
-        case 1: debugStream = true; break;
-        case 2: debugStream = !debugStream; break;
-        }
+    if (HAL_CAN_GetRxMessage(&hcan, CAN_RX_FIFO0, &rxHeader, rxData) != HAL_OK)
+      continue;
+    if (rxHeader.DLC < 1) continue;
+    if (rxHeader.StdId == CANSULT_CAN_ID_DBG_CMD) {
+      switch (rxData[0]) {
+      case 0: debugStream = false; break;
+      case 1: debugStream = true; break;
+      case 2: debugStream = !debugStream; break;
+      }
+    } else if (rxHeader.StdId == CANSULT_CAN_ID_MODE_CMD) {
+      switch (rxData[0]) {
+      case 0: exitAdapterMode(); break;
+      case 1: enterAdapterMode(); break;
+      case 2:
+        if (mode == CANSULT_MODE_STREAM) enterAdapterMode();
+        else exitAdapterMode();
+        break;
       }
     }
   }
@@ -478,7 +546,11 @@ void cansult_tick(void) {
   }
 
   time = HAL_GetTick();
-  processEcuBytes();  /* drain & update tempTime FIRST */
-  route();            /* then check watchdog */
+  if (mode == CANSULT_MODE_STREAM) {
+    processEcuBytes();  /* drain & update tempTime FIRST */
+    route();            /* then check watchdog */
+  }
+  /* In ADAPTER mode parser/watchdog/CAN stream are paused; BT module owns
+     the UART line, MCU just keeps CAN diag alive + polls for exit cmd. */
   sendDiagFrame();
 }
