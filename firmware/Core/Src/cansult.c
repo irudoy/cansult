@@ -207,7 +207,7 @@ static int16_t readMcuTempC10(void) {
 }
 
 /* --- Diagnostic frames 0x665 + 0x66B at 1Hz --- */
-static uint16_t lastOreSnap, lastFeNeSnap, lastCanSnap;
+static uint16_t lastOreSnap, lastImplausibleSnap, lastCanSnap;
 
 static uint8_t deltaSat(uint16_t prev, uint16_t curr) {
   uint16_t d = curr - prev;
@@ -219,12 +219,13 @@ static void sendDiagFrame(void) {
   lastDiagTime = time;
 
   /* 0x665: bytes 1-3 are per-second rates (saturating at 255),
-     bytes 4-6 are monotonic u8 counters, byte 7 is ms since last frame /4. */
-  uint16_t feNe = cansult_diag.uart_fe_count + cansult_diag.uart_ne_count;
+     bytes 4-6 are monotonic u8 counters, byte 7 is ms since last frame /4.
+     FE+NE rate isn't emitted here — derive it from the u16 FE/NE counters
+     in 0x66B by taking the delta between two consecutive diag samples. */
   uint8_t data[8];
   data[0] = parser.state;
   data[1] = deltaSat(lastOreSnap, cansult_diag.uart_ore_count);
-  data[2] = deltaSat(lastFeNeSnap, feNe);
+  data[2] = deltaSat(lastImplausibleSnap, cansult_diag.implausible_frame_count);
   data[3] = deltaSat(lastCanSnap, cansult_diag.can_tx_fail_count);
   data[4] = cansult_diag.dma_restart_count;
   data[5] = cansult_diag.watchdog_timeout_count;
@@ -232,7 +233,7 @@ static void sendDiagFrame(void) {
   data[7] = (uint8_t)((time - tempTime) >> 2);
   canTx(CANSULT_CAN_ID_DIAG, data, 8);
   lastOreSnap = cansult_diag.uart_ore_count;
-  lastFeNeSnap = feNe;
+  lastImplausibleSnap = cansult_diag.implausible_frame_count;
   lastCanSnap = cansult_diag.can_tx_fail_count;
 
   /* Update current MCU temperature (signed, °C*10) */

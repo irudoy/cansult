@@ -24,11 +24,13 @@ USART1 RX (PA10)
   │
   ▼ sendCanFrames() @ 20Hz
   │
-CAN TX → 0x666, 0x667, 0x668
-         0x665 (diagnostics @ 1Hz)
+CAN TX → 0x666, 0x667, 0x668 (stream data @ 20Hz)
+         0x665 (diagnostics — state, rates, freshness @ 1Hz)
+         0x66B (diagnostics — u16 error counters, MCU temp, mode @ 1Hz)
          0x669, 0x66A (debug UART stream, when enabled)
   │
 CAN RX ← 0x66F (debug command: enable/disable UART stream)
+         0x66D (mode command: STREAM ↔ ADAPTER / BT pass-through)
 ```
 
 ## State Machine
@@ -69,7 +71,7 @@ Nissan Consult protocol byte parser. Pure state machine, no HAL.
 
 ### Core/Inc/cansult_diag.h
 
-Shared diagnostic counters (volatile for ISR-written fields). All uint8_t — atomic on Cortex-M3, wrapping is fine (look at deltas).
+Shared diagnostic counters. ISR-written fields are `volatile`. Mix of u16 (where wraparound during a normal session matters — `uart_ore/fe/ne`, `can_tx_fail`, `good_frame`, `implausible_frame`) and u8 (for rare events — `dma_restart`, `watchdog_timeout`, `reconnect`, `can_recover`). All wide-word writes are single-instruction on Cortex-M3 when aligned, so the ISR/main race is safe for diagnostics (look at deltas).
 
 ### Core/Src/cansult.c (HAL glue)
 
@@ -80,10 +82,13 @@ Shared diagnostic counters (volatile for ISR-written fields). All uint8_t — at
 - `requestStreaming()`: batch TX 35 bytes in single HAL call
 - DMA auto-restart: if `huart1.RxState == READY`, re-init DMA (increments `dma_restart_count`)
 - `canTx()`: helper wrapping `HAL_CAN_AddTxMessage` with mailbox check
-- `sendDiagFrame()`: 1Hz diagnostic frame on 0x665 with error counters
+- `sendDiagFrame()`: 1Hz diagnostics — 0x665 (state + rates + freshness) and 0x66B (u16 error counters + MCU temp + mode/CAN state)
+- `recoverCan()`: brings the CAN peripheral back from bus-off / RESET / ERROR via `HAL_CAN_Stop` + deinit/init/start (bumps `can_recover_count`)
+- `enterAdapterMode()` / `exitAdapterMode()`: toggled by CAN 0x66D. Adapter mode releases PA9 to high-Z, powers BT_EN (PA8), and pauses parser/watchdog/CAN stream so the PC can talk straight to the ECU over BT
 - Debug UART stream: raw RX/TX bytes on 0x669/0x66A (off by default)
-- CAN RX: filter for 0x66F, polled in `cansult_tick()` to toggle debug stream
+- CAN RX: filter for 0x66F (debug cmd) + 0x66D (mode cmd), polled in `cansult_tick()`
 - Race fix: `processEcuBytes()` runs before `route()` so watchdog sees freshly drained bytes
+- Plausibility guard: `consult_parser_validate_stream()` rejects frames with impossible values (RPM>10000, speed>250, etc.), rolls `data[]` back to last-good snapshot; counter `implausible_frame_count`
 
 ### Core/Src/stm32f1xx_it.c (ISR)
 
@@ -110,9 +115,9 @@ Configured via CubeMX (`cansult.ioc`):
 
 See `README.md` for frame layout and data conversion.
 
-- CAN IDs: 0x666-0x668 (data), 0x665 (diagnostics @ 1Hz), 0x669/0x66A (debug stream), 0x66F (debug cmd RX)
+- CAN IDs: 0x666-0x668 (data), 0x665/0x66B (diagnostics @ 1Hz), 0x669/0x66A (debug stream), 0x66F (debug cmd RX), 0x66D (mode cmd RX)
 - Bitrate: 500 kbit/s
-- TX rate: 20Hz (50ms interval)
+- TX rate: 20Hz (50ms interval), paused in ADAPTER mode (BT pass-through)
 - 17 ECU registers streamed per cycle
 
 ## Consult Protocol
@@ -126,7 +131,7 @@ See `docs/UART_RELIABILITY.md` for detailed protocol analysis.
 
 ## Testing
 
-21 host tests via Unity (`make test`):
+28 host tests via Unity (`make test`):
 
 - `test_uart_rx_buf` (7 tests): push/pop, FIFO order, wraparound, full drops, flush
-- `test_consult_parser` (14 tests): init response, stream frames, ECU info parsing, fault codes (incl. bounds check, zero count), state guards
+- `test_consult_parser` (21 tests): init response, stream frames, ECU info parsing (24-byte layout), fault codes (incl. bounds check, zero count), state guards, plausibility check (accept/reject/rollback across RPM/speed/battery/MAF, first-bad-with-no-snapshot, engine-off)

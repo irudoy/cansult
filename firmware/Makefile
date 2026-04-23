@@ -127,7 +127,7 @@ can-monitor:
 	python3 scripts/can_monitor.py --channel $(PCAN_CHANNEL) --bitrate $(CAN_BITRATE) --stdout
 
 can-diag:
-	python3 scripts/can_monitor.py --channel $(PCAN_CHANNEL) --bitrate $(CAN_BITRATE) --stdout --ids 0x665
+	python3 scripts/can_monitor.py --channel $(PCAN_CHANNEL) --bitrate $(CAN_BITRATE) --stdout --ids 0x665,0x66B
 
 # Send CAN command to toggle debug UART stream
 can-debug-on:

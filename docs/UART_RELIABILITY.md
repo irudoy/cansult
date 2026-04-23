@@ -1,6 +1,16 @@
 # UART Reliability Research: cansult ECU Communication
 
-Research date: 2026-04-06
+Research date: 2026-04-06.
+
+> **Status (updated 2026-04-24).** Kept for historical context. The
+> "root cause still unknown" note in §6 has since been resolved:
+> the periodic drops were **thermal** — the LDO/LMV358 chain on the
+> CLK path heated above ≈28.5 °C and corrupted UART timing. Fix:
+> MCU now drives the consult CLK via TIM2_CH2 PWM on PB3 (commit
+> 548cc15), and the U2 MC74HC4060 divider is being removed in the
+> next PCB rev (see `docs/ROADMAP.md`). All Level 3 (CAN robustness)
+> and Level 4 (observability) items below have been implemented;
+> see updated checkboxes at the end of this file.
 
 ## Problem Statement
 
@@ -204,9 +214,9 @@ void process_dma_rx(void) {
 ### Additional changes made during implementation
 
 - **Architecture refactor**: business logic extracted to `Lib/` (host-testable), HAL glue in `Core/Src/cansult.c`
-- **consult_parser** module: protocol byte parser as pure state machine, 14 unit tests
+- **consult_parser** module: protocol byte parser as pure state machine, 21 unit tests (incl. plausibility guard)
 - **uart_rx_buf** module: ring buffer, 7 unit tests
-- **Makefile + test infra**: build/test/flash targets, Unity framework, 21 total tests
+- **Makefile + test infra**: build/test/flash targets, Unity framework, 28 total tests
 - **Stack size**: increased 0x400 → 0x800 (HAL_UART_Transmit + DMA drain call depth)
 - **Batch TX**: `requestStreaming()` sends 35 bytes in single HAL call (was 35 separate calls)
 - **ST-Link serial**: pinned in Makefile to prevent cross-flashing
@@ -243,10 +253,12 @@ State transitions during reconnect: `05→00→01→00→01→03→00→03→04�
 5. **Level 1+2 fixes work**: reconnect succeeds every time (no permanent hang)
 6. **Root cause still unknown**: ECU streams indefinitely (per spec), so something on cansult side triggers the drop
 
-### TODO
+### TODO (status 2026-04-24)
 
-- [ ] Implement Level 3 (CAN robustness: AutoBusOff, TX error handling, IWDG)
-- [ ] Implement Level 4 (error counters and state durations in 0x665)
-- [ ] Add UART error counters (ORE/FE/NE) to debug output to confirm whether drops correlate with UART errors
-- [ ] Test with longer DMA buffer (64→128 bytes) to rule out buffer overruns during CAN TX
-- [ ] Check if CAN TX mailbox full blocks parser drain, causing DMA overrun cascade
+- [x] Level 3 — AutoBusOff + software `recoverCan()` for RESET/ERROR states landed in commit 0f87011. TX-error handling via `canTx` mailbox check is in place. IWDG deferred (not needed once thermal root cause was addressed).
+- [x] Level 4 — 0x665 carries parser state + per-second rates (ORE, implausible, CAN fail) + monotonic u8 counters + freshness. Extended 0x66B adds full-width FE/NE u16, MCU temp, CAN recover count, mode/state.
+- [x] UART error counters (ORE/FE/NE) exposed on both 0x665 (rate) and 0x66B (u16).
+- [x] DMA buffer is 128 bytes (circular, DMA1 Ch5). See `docs/ARCHITECTURE.md`.
+- [x] CAN TX mailbox check implemented in `canTx()`; failures increment `can_tx_fail_count` instead of blocking the drain.
+- [x] Root cause of periodic drops identified as thermal (LDO/LMV358 on CLK path above ≈28.5 °C). MCU now generates the 153.52 kHz consult CLK via TIM2_CH2 PWM (commit 548cc15); external divider slated for removal on next PCB.
+- [x] Plausibility guard rejects decoded frames with impossible values (RPM>10000 etc.) and rolls `data[]` back to last-good snapshot (`consult_parser_validate_stream`, commit 2d9f05f).

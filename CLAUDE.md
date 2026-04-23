@@ -24,7 +24,7 @@ firmware/
 ├── Core/Inc/
 │   ├── cansult.h     # Constants, CAN IDs, register defs
 │   └── cansult_diag.h # Diagnostic counters (UART errors, CAN fails, DMA restarts)
-├── test/             # Host unit tests (Unity), 21 tests
+├── test/             # Host unit tests (Unity), 28 tests
 │   ├── unity/
 │   ├── test_uart_rx_buf.c
 │   └── test_consult_parser.c
@@ -41,7 +41,7 @@ firmware/
 
 ```bash
 make build        # CubeIDE headless build
-make test         # Host unit tests (21 tests)
+make test         # Host unit tests (28 tests)
 make flash        # Build + flash via ST-Link SWD
 make reset        # Hardware reset
 make ocd-server   # OpenOCD GDB server on :3333
@@ -50,11 +50,13 @@ make gdb-read EXPRS="parser.state"  # Read variables (auto OpenOCD)
 make gdb-exec SCRIPT=script.gdb    # Run GDB commands (auto OpenOCD)
 make ocd-dump         # Full state snapshot via GDB
 make can-monitor      # Foreground CAN monitor (all frames, for human use)
-make can-diag         # Foreground, 0x665 diagnostics only
+make can-diag         # Foreground, 0x665 + 0x66B diagnostics only
 make can-debug-on     # Enable UART debug stream (0x669/0x66A)
 make can-debug-off    # Disable UART debug stream
+make can-adapter-on   # Enter BT pass-through ADAPTER mode (0x66D)
+make can-adapter-off  # Exit ADAPTER mode back to STREAM
 make can-capture          # Atomic: capture all frames for N sec (CAN_DURATION=3)
-make can-capture-diag     # Atomic: capture 0x665 only
+make can-capture-diag     # Atomic: capture 0x665 + 0x66B only
 make can-capture-debug    # Atomic: enable debug + capture UART traffic
 ```
 
