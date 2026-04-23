@@ -104,9 +104,8 @@ Send to cansult to control debug stream:
 
 ## Hardware
 
-* STM32F103TBU6
-* MCP2562
-* MC74HC4060
+* STM32F103TBU6 — generates the 153.52 kHz Consult CLK on PB3 via TIM2_CH2 PWM
+* MCP2562 — CAN transceiver
 
 <img src="hardware/export/pcb-f.png" />
 <img src="hardware/export/pcb-b.png" />
