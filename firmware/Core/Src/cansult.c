@@ -273,8 +273,16 @@ static void processEcuBytes(void) {
       readFaultCodes();
       break;
     case CONSULT_EVENT_STREAM_FRAME:
-      tempTime = time;  /* watchdog: got data */
-      cansult_diag.good_frame_count++;
+      /* Reject impossible values (RPM>10000, Speed>250 etc). These come
+       * from UART byte-shifts (no CRC in Consult stream) and would send
+       * 745663 rpm spikes downstream. On failure the parser rolls back
+       * to last-good data so CAN TX repeats the previous frame. */
+      if (consult_parser_validate_stream(&parser)) {
+        tempTime = time;  /* watchdog: got data */
+        cansult_diag.good_frame_count++;
+      } else {
+        cansult_diag.implausible_frame_count++;
+      }
       break;
     case CONSULT_EVENT_FAULT_CODES_READY:
       resumeMainStream();

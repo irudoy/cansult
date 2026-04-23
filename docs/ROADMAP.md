@@ -20,3 +20,7 @@
 ## Firmware
 
 - **BT adapter mode — e2e validation** (implemented 2026-04-24, commit b4d54b6). Firmware side done: CAN 0x66D toggles `cansult_mode_t` between STREAM (normal 20 Hz CAN TX) and ADAPTER (stopStream → PA9 high-Z → BT_EN high → parser paused); DIAG2 byte 7 bit 7 reflects mode. Not yet validated on hardware: need a real PC ↔ BC417 ↔ ECU session (Nistune / NDSIII) and confirmation that (a) the ECU actually halts its telemetry after `stopStream()` before PA9 goes high-Z, (b) PA9 high-Z doesn't back-drive the shared BT_TX line, (c) `exitAdapterMode` resyncs the DMA/parser without losing the initial ECU handshake. Ties into the hardware-side "Verify & debug Bluetooth extension" item above.
+
+## Done
+
+- **Stream plausibility check** (2026-04-20). After a 17-byte CONSULT_FRSTATE_STREAM frame is assembled, `consult_parser_validate_stream()` applies per-field range limits (RPM ≤ 10000 rpm, Speed ≤ 250 km/h, INJ ≤ 100 ms, MAF ≤ 5.115 V, Battery 3.2–20 V). On failure, `data[]` is rolled back to the last plausible snapshot so CAN TX repeats the previous known-good frame instead of emitting a UART-shift spike (observed RPM 745 663 in canlogger log-19-04). New counter `cansult_diag.implausible_frame_count`. See `Lib/consult_parser.c:consult_parser_validate_stream` and `test/test_consult_parser.c` (7 new unit tests).

@@ -15,6 +15,9 @@ typedef struct {
   uint8_t dma_restart_count;
   uint8_t watchdog_timeout_count;
   uint16_t good_frame_count;
+  /* Frames that assembled correctly but failed plausibility check
+   * (e.g. RPM > 10000) — almost always a UART byte-shift from ORE/FE. */
+  uint16_t implausible_frame_count;
 
   /* MCU internal temp sensor, °C * 10 (signed) */
   int16_t mcu_temp_c10;

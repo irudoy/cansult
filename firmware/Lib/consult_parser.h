@@ -63,6 +63,12 @@ typedef struct {
     /* Stream data (17 registers) */
     uint8_t data[CONSULT_STREAM_FRAME_SIZE];
 
+    /* Snapshot of the last frame that passed plausibility check.
+     * On a failed check consult_parser_validate() rolls data[] back
+     * to this snapshot so downstream CAN TX sends last-known-good. */
+    uint8_t last_good_data[CONSULT_STREAM_FRAME_SIZE];
+    bool    have_last_good;
+
     /* ECU part number: "23710-XXXXX" */
     char ecu_part_no[11];
 
@@ -85,5 +91,20 @@ void consult_parser_start_frame(consult_parser_t *p, consult_frame_state_t fstat
 
 /* Reset frame reader */
 void consult_parser_reset_frame(consult_parser_t *p);
+
+/* Validate last assembled stream frame. Consult has no per-frame CRC, so a
+ * dropped/extra UART byte can shift framing permanently and produce wildly
+ * out-of-range values (RPM=745663 etc.). This check rejects frames whose
+ * decoded values cannot occur on a real engine.
+ *
+ * On plausible frame: copies data[] into last_good_data and returns true.
+ * On implausible frame: restores data[] from last_good_data (if available)
+ * and returns false. Caller should increment a drop counter.
+ *
+ * Data layout must match the request order in requestStreaming()
+ * (cansult.c:streamCmd): Battery, Coolant, IgnT, O2, TPS, AAC, AFA,
+ * AFA_SL, Speed, TACH_MSB, TACH_LSB, INJ_MSB, INJ_LSB, MAF_MSB, MAF_LSB,
+ * BIT_1, BIT_2. */
+bool consult_parser_validate_stream(consult_parser_t *p);
 
 #endif

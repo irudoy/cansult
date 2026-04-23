@@ -189,6 +189,89 @@ void test_stream_sync_ignored_when_not_streaming(void) {
     TEST_ASSERT_FALSE(p.reading_frame);
 }
 
+/* --- Plausibility check --- */
+
+/* Layout indices (must mirror consult_parser.c internals). */
+#define OFF_BATTERY   0
+#define OFF_SPEED     8
+#define OFF_TACH_MSB  9
+#define OFF_TACH_LSB  10
+#define OFF_INJ_MSB   11
+#define OFF_INJ_LSB   12
+#define OFF_MAF_MSB   13
+#define OFF_MAF_LSB   14
+
+static void fill_plausible(consult_parser_t *pp) {
+    for (int i = 0; i < CONSULT_STREAM_FRAME_SIZE; i++) pp->data[i] = 0;
+    pp->data[OFF_BATTERY]  = 175; /* 14.0 V */
+    pp->data[OFF_SPEED]    = 30;  /* 60 km/h */
+    pp->data[OFF_TACH_MSB] = 0x01;
+    pp->data[OFF_TACH_LSB] = 0x40; /* raw 320 → 4000 rpm */
+    pp->data[OFF_INJ_MSB]  = 0x01;
+    pp->data[OFF_INJ_LSB]  = 0xF4; /* raw 500 → 5.00 ms */
+    pp->data[OFF_MAF_MSB]  = 0x01;
+    pp->data[OFF_MAF_LSB]  = 0x90; /* raw 400 → 2000 mV */
+}
+
+void test_validate_accepts_plausible(void) {
+    fill_plausible(&p);
+    TEST_ASSERT_TRUE(consult_parser_validate_stream(&p));
+    TEST_ASSERT_TRUE(p.have_last_good);
+    TEST_ASSERT_EQUAL(175, p.last_good_data[OFF_BATTERY]);
+}
+
+void test_validate_rejects_rpm_spike(void) {
+    fill_plausible(&p);
+    consult_parser_validate_stream(&p); /* seed last_good */
+
+    /* Shifted frame: RPM MSB = 0xE9 → 745663 rpm */
+    p.data[OFF_TACH_MSB] = 0xE9;
+    p.data[OFF_TACH_LSB] = 0xC5;
+
+    TEST_ASSERT_FALSE(consult_parser_validate_stream(&p));
+    /* data[] rolled back to previous good snapshot */
+    TEST_ASSERT_EQUAL(0x01, p.data[OFF_TACH_MSB]);
+    TEST_ASSERT_EQUAL(0x40, p.data[OFF_TACH_LSB]);
+}
+
+void test_validate_rejects_impossible_speed(void) {
+    fill_plausible(&p);
+    consult_parser_validate_stream(&p);
+    p.data[OFF_SPEED] = 200; /* 400 km/h */
+    TEST_ASSERT_FALSE(consult_parser_validate_stream(&p));
+}
+
+void test_validate_rejects_low_battery(void) {
+    fill_plausible(&p);
+    consult_parser_validate_stream(&p);
+    p.data[OFF_BATTERY] = 20; /* 1.6 V — wiring fault */
+    TEST_ASSERT_FALSE(consult_parser_validate_stream(&p));
+}
+
+void test_validate_rejects_maf_over_5v(void) {
+    fill_plausible(&p);
+    consult_parser_validate_stream(&p);
+    p.data[OFF_MAF_MSB] = 0x04; /* raw 0x0400 = 1024 * 5 = 5120 mV */
+    p.data[OFF_MAF_LSB] = 0x00;
+    TEST_ASSERT_FALSE(consult_parser_validate_stream(&p));
+}
+
+void test_validate_first_bad_frame_keeps_zeros(void) {
+    /* No prior good frame — rollback has nothing, data[] stays as-is. */
+    for (int i = 0; i < CONSULT_STREAM_FRAME_SIZE; i++) p.data[i] = 0xEE;
+    TEST_ASSERT_FALSE(consult_parser_validate_stream(&p));
+    TEST_ASSERT_FALSE(p.have_last_good);
+}
+
+void test_validate_zero_rpm_is_plausible(void) {
+    /* Engine off — all zeros except battery in plausible range. */
+    fill_plausible(&p);
+    p.data[OFF_TACH_MSB] = 0;
+    p.data[OFF_TACH_LSB] = 0;
+    p.data[OFF_SPEED]    = 0;
+    TEST_ASSERT_TRUE(consult_parser_validate_stream(&p));
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_init_defaults);
@@ -205,5 +288,12 @@ int main(void) {
     RUN_TEST(test_set_state);
     RUN_TEST(test_bytes_ignored_in_wrong_state);
     RUN_TEST(test_stream_sync_ignored_when_not_streaming);
+    RUN_TEST(test_validate_accepts_plausible);
+    RUN_TEST(test_validate_rejects_rpm_spike);
+    RUN_TEST(test_validate_rejects_impossible_speed);
+    RUN_TEST(test_validate_rejects_low_battery);
+    RUN_TEST(test_validate_rejects_maf_over_5v);
+    RUN_TEST(test_validate_first_bad_frame_keeps_zeros);
+    RUN_TEST(test_validate_zero_rpm_is_plausible);
     return UNITY_END();
 }

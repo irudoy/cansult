@@ -12,8 +12,11 @@ void consult_parser_init(consult_parser_t *p) {
     p->curr_byte = 0;
     p->prev_byte = 0;
 
-    for (int i = 0; i < CONSULT_STREAM_FRAME_SIZE; i++)
+    for (int i = 0; i < CONSULT_STREAM_FRAME_SIZE; i++) {
         p->data[i] = 0;
+        p->last_good_data[i] = 0;
+    }
+    p->have_last_good = false;
 
     p->ecu_part_no[0] = '2';
     p->ecu_part_no[1] = '3';
@@ -137,4 +140,58 @@ consult_event_t consult_parser_feed(consult_parser_t *p, uint8_t byte) {
     }
 
     return CONSULT_EVENT_NONE;
+}
+
+/* Data byte offsets — must match streamCmd[] in cansult.c. */
+#define CONSULT_OFF_BATTERY    0
+#define CONSULT_OFF_COOLANT    1
+#define CONSULT_OFF_SPEED      8
+#define CONSULT_OFF_TACH_MSB   9
+#define CONSULT_OFF_TACH_LSB   10
+#define CONSULT_OFF_INJ_MSB    11
+#define CONSULT_OFF_INJ_LSB    12
+#define CONSULT_OFF_MAF_MSB    13
+#define CONSULT_OFF_MAF_LSB    14
+
+/* Plausibility limits — engineered to catch UART framing shifts, not tight
+ * operational bounds. Each is derived from the OEM register scale in the
+ * Nissan Consult spec:
+ *   RPM  = raw * 12.5      → raw 800  = 10000 rpm
+ *   Speed= raw * 2 km/h    → raw 125  = 250 km/h
+ *   INJ  = raw * 0.01 ms   → raw 10000= 100 ms
+ *   MAF  = raw * 5 mV      → raw 1023 = 5.115 V (AFM ceiling is 5.0 V)
+ *   Batt = raw * 0.08 V    → raw 40   = 3.2 V, raw 250 = 20 V */
+#define CONSULT_MAX_RPM_RAW     800u
+#define CONSULT_MAX_SPEED_RAW   125u
+#define CONSULT_MAX_INJ_RAW     10000u
+#define CONSULT_MAX_MAF_RAW     1023u
+#define CONSULT_MIN_BATT_RAW    40u
+#define CONSULT_MAX_BATT_RAW    250u
+
+bool consult_parser_validate_stream(consult_parser_t *p) {
+    uint16_t rpm_raw   = ((uint16_t)p->data[CONSULT_OFF_TACH_MSB] << 8) | p->data[CONSULT_OFF_TACH_LSB];
+    uint16_t inj_raw   = ((uint16_t)p->data[CONSULT_OFF_INJ_MSB] << 8)  | p->data[CONSULT_OFF_INJ_LSB];
+    uint16_t maf_raw   = ((uint16_t)p->data[CONSULT_OFF_MAF_MSB] << 8)  | p->data[CONSULT_OFF_MAF_LSB];
+    uint8_t  speed_raw = p->data[CONSULT_OFF_SPEED];
+    uint8_t  batt_raw  = p->data[CONSULT_OFF_BATTERY];
+
+    bool ok = (rpm_raw   <= CONSULT_MAX_RPM_RAW)
+           && (inj_raw   <= CONSULT_MAX_INJ_RAW)
+           && (maf_raw   <= CONSULT_MAX_MAF_RAW)
+           && (speed_raw <= CONSULT_MAX_SPEED_RAW)
+           && (batt_raw  >= CONSULT_MIN_BATT_RAW)
+           && (batt_raw  <= CONSULT_MAX_BATT_RAW);
+
+    if (ok) {
+        for (int i = 0; i < CONSULT_STREAM_FRAME_SIZE; i++)
+            p->last_good_data[i] = p->data[i];
+        p->have_last_good = true;
+        return true;
+    }
+
+    if (p->have_last_good) {
+        for (int i = 0; i < CONSULT_STREAM_FRAME_SIZE; i++)
+            p->data[i] = p->last_good_data[i];
+    }
+    return false;
 }
